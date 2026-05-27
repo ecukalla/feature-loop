@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+    # Skip lint + test on PRs that only touch docs/markdown — contributors are
+    # expected to run `make lint` (pre-commit) locally for those changes.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
   workflow_dispatch:
 
 permissions:
