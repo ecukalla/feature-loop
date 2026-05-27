@@ -1,0 +1,53 @@
+name: pre-commit autoupdate
+
+# Weekly bump of pre-commit hook revs. Dependabot does not cover the pre-commit
+# ecosystem, so this fills the gap: each week, run `pre-commit autoupdate`, run all
+# hooks against the new revs, and open a PR if anything changed.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"  # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: pre-commit-autoupdate
+  cancel-in-progress: true
+
+jobs:
+  autoupdate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.x"
+
+      - uses: actions/setup-go@v6.4.0
+        with:
+          go-version: stable
+
+      - run: python -m pip install pre-commit
+
+      - name: autoupdate hook revs
+        run: pre-commit autoupdate
+
+      - name: run hooks against the bumped revs
+        run: pre-commit run --all-files --show-diff-on-failure
+
+      # SHA-pinned for supply-chain safety; dependabot bumps the comment + SHA together.
+      - uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1  # v8.1.1
+        with:
+          commit-message: "ci: pre-commit autoupdate"
+          title: "ci: pre-commit autoupdate"
+          body: |
+            Automated weekly bump of pre-commit hook versions via `pre-commit autoupdate`.
+
+            All hooks were re-run against the new revs as part of this job.
+          branch: ci/pre-commit-autoupdate
+          delete-branch: true
+          labels: ci, dependencies
