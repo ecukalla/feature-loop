@@ -1,0 +1,2 @@
+# Allow following `source`/`.` into other files during analysis.
+external-sources=true
