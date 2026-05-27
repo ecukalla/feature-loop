@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+#
+# feature-loop-docker — run the loop in a container, headless, no approvals.
+#
+# Bring your own image. feature-loop does NOT force a base on you: you name any
+# image or Dockerfile (your toolchain), and feature-loop wraps it with a small,
+# cached overlay that injects only what it needs — the Claude CLI, the agent-skills
+# plugin, and the engine. Docker layer caching makes that a one-time cost per base.
+#
+# Base resolution (first match wins):
+#   --image REF              flag, per run
+#   FL_IMAGE                 .featureloop — an existing image (e.g. python:3.14-slim)
+#   FL_DOCKERFILE            .featureloop — your Dockerfile to build as the base
+#   default                  a neutral PUBLIC image (node:22-bookworm-slim)
+#
+# Usage: ANTHROPIC_API_KEY=… feature-loop-docker [--image REF] <TICKET> <slug>
+set -euo pipefail
+
+readonly FL_VERSION="0.1.0"
+# Conservative identifier — TICKET/SLUG end up in branch names, paths, image tags.
+readonly IDENT_RE='^[A-Za-z0-9._-]{1,64}$'
+# OCI image reference: [registry[:port]/]name[:tag][@sha256:digest]
+# A line-safe subset of Docker's reference grammar — permissive enough for real refs
+# (including private registries with a port, e.g. localhost:5000/foo:tag) while
+# blocking newlines/spaces/shell-metacharacters that could inject into a Dockerfile.
+readonly OCI_RE='^[A-Za-z0-9][A-Za-z0-9._-]*(:[0-9]+)?(/[A-Za-z0-9._-]+)*(:[A-Za-z0-9._-]{1,128})?(@sha256:[a-f0-9]{64})?$'
+
+die() {
+  echo "ERROR: $*" >&2
+  exit 2
+}
+validate_ident() { [[ "$2" =~ $IDENT_RE ]] || die "$1 must match $IDENT_RE"; }
+validate_image() { [[ "$2" =~ $OCI_RE ]] || die "invalid $1: $2"; }
+validate_relpath() {
+  case "$2" in
+    /*) die "$1 must be a relative path" ;;
+    *..*) die "$1 must not contain '..'" ;;
+  esac
+}
+
+usage() {
+  cat >&2 << 'EOF'
+Usage: feature-loop-docker [--image REF] <TICKET> <slug>
+
+Runs the feature-loop in a container — bring your own base image. Injects
+claude + agent-skills + the engine as a cached overlay. Needs ANTHROPIC_API_KEY.
+
+Options:
+  --image REF    base image to overlay (overrides .featureloop)
+  -h, --help     show this help and exit
+  -V, --version  print version and exit
+EOF
+}
+
+CLI_IMAGE=""
+NO_CONFIG=0
+ARGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    -V | --version)
+      echo "feature-loop-docker ${FL_VERSION}"
+      exit 0
+      ;;
+    --image)
+      CLI_IMAGE="${2:-}"
+      shift 2
+      ;;
+    --image=*)
+      CLI_IMAGE="${1#*=}"
+      shift
+      ;;
+    --no-config)
+      NO_CONFIG=1
+      shift
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage
+      exit 2
+      ;;
+    *)
+      ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+set -- ${ARGS[@]+"${ARGS[@]}"}
+TICKET="${1:-}"
+SLUG="${2:-}"
+[ -n "$TICKET" ] && [ -n "$SLUG" ] || {
+  usage
+  exit 2
+}
+
+# Validate before requiring ANTHROPIC_API_KEY so bad input fails fast. These values
+# end up in branch names, image tags, paths, and the shell command that enters the
+# container.
+validate_ident TICKET "$TICKET"
+validate_ident SLUG "$SLUG"
+[ -z "$CLI_IMAGE" ] || validate_image image "$CLI_IMAGE"
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+TOOL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Defaults preserved from env; .featureloop overrides if present.
+FL_IMAGE="${FL_IMAGE:-}"
+FL_DOCKERFILE="${FL_DOCKERFILE:-}"
+FL_DEFAULT_BASE="${FL_DEFAULT_BASE:-node:22-bookworm-slim}"
+# shellcheck disable=SC1091
+[ "$NO_CONFIG" -eq 0 ] && [ -f "$REPO_ROOT/.featureloop" ] && . "$REPO_ROOT/.featureloop"
+
+# Validate config-supplied image refs and Dockerfile path.
+[ -z "$FL_IMAGE" ] || validate_image FL_IMAGE "$FL_IMAGE"
+[ -z "$FL_DOCKERFILE" ] || validate_relpath FL_DOCKERFILE "$FL_DOCKERFILE"
+
+: "${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY in your environment first}"
+
+# 1) resolve the base you brought
+if [ -n "$CLI_IMAGE" ]; then
+  BASE_IMAGE="$CLI_IMAGE"
+elif [ -n "$FL_IMAGE" ]; then
+  BASE_IMAGE="$FL_IMAGE"
+elif [ -n "$FL_DOCKERFILE" ] && [ -f "$REPO_ROOT/$FL_DOCKERFILE" ]; then
+  echo "==> building your base from $FL_DOCKERFILE"
+  docker build -t "feature-loop-userbase:${TICKET}" \
+    -f "$REPO_ROOT/$FL_DOCKERFILE" "$REPO_ROOT/$(dirname "$FL_DOCKERFILE")"
+  BASE_IMAGE="feature-loop-userbase:${TICKET}"
+else
+  BASE_IMAGE="$FL_DEFAULT_BASE"
+fi
+echo "==> base image: $BASE_IMAGE"
+# Defensive: re-check post-resolution (catches an FL_DEFAULT_BASE override).
+validate_image "base image" "$BASE_IMAGE"
+
+# 2) wrap it with the feature-loop overlay (claude + plugin + engine), cached
+RUN_IMAGE="feature-loop-run:${TICKET}"
+CTX="$(mktemp -d)"
+# Clean up on early exits AND on signals — we explicitly clean before `exec` below,
+# since EXIT traps don't fire when bash is replaced by exec.
+trap 'rm -rf "$CTX"' EXIT INT TERM
+cp "$TOOL_ROOT/bin/feature-loop" "$CTX/feature-loop"
+cp "$TOOL_ROOT/docker/overlay-bootstrap.sh" "$CTX/overlay-bootstrap.sh"
+cat > "$CTX/Dockerfile" << EOF
+FROM ${BASE_IMAGE}
+COPY feature-loop /usr/local/bin/feature-loop
+COPY overlay-bootstrap.sh /usr/local/bin/fl-bootstrap
+RUN chmod +x /usr/local/bin/feature-loop /usr/local/bin/fl-bootstrap \\
+ && /usr/local/bin/fl-bootstrap
+USER fluser
+WORKDIR /workspace
+EOF
+echo "==> applying feature-loop overlay"
+docker build -t "$RUN_IMAGE" "$CTX"
+rm -rf "$CTX"
+trap - EXIT INT TERM
+
+# 3) run the loop as the non-root user the overlay created
+TTY=""
+[ -t 0 ] && [ -t 1 ] && TTY="-t"
+echo "==> running feature-loop for ${TICKET} (${SLUG})"
+# Pass TICKET and SLUG as positional args, not via shell interpolation — even with
+# IDENT_RE blocking quotes, the positional form removes the dependency on regex
+# correctness for safety (defense in depth).
+exec docker run --rm -i $TTY \
+  -e ANTHROPIC_API_KEY \
+  -v "$REPO_ROOT:/workspace" -w /workspace \
+  "$RUN_IMAGE" \
+  bash -c 'git config --global --add safe.directory "*" && exec feature-loop "$1" "$2"' \
+  feature-loop-entry "$TICKET" "$SLUG"

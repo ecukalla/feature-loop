@@ -1,0 +1,10 @@
+{
+  "name": "feature-loop",
+  "owner": { "name": "Edmond Cukalla" },
+  "metadata": {
+    "description": "Autonomous build → verify → fix loop for any repo, on top of agent-skills."
+  },
+  "plugins": [
+    { "name": "feature-loop", "source": "./" }
+  ]
+}

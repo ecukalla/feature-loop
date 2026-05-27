@@ -1,0 +1,251 @@
+#!/usr/bin/env bash
+#
+# feature-loop — config-driven autonomous build → verify → fix loop.
+#
+# Project-agnostic. Reads ./.featureloop from the target repo for the bits that
+# differ per project (gate command, base branch, prompts). The loop itself never
+# changes. Run /spec and /plan first; this starts from the plan file.
+#
+#   1. worktree off origin/<base> on feature/<TICKET>-<slug>
+#   2. /build         (the ONLY writer) ← plan + tasks/failures/*.md
+#   3-5. parallel READ-ONLY gates: /test, project gates ($FL_GATES), security audit
+#   6. loop fixes through /build until green, then /code-simplify + re-verify
+#
+# State → <worktree>/tasks/STATUS.md. Runs each `claude -p` with
+# --dangerously-skip-permissions, so use it inside a container (see feature-loop-docker).
+#
+# Usage: feature-loop <TICKET> <slug>
+set -euo pipefail
+
+readonly FL_VERSION="0.1.0"
+# Conservative identifier — TICKET/SLUG end up in branch names, paths, image tags,
+# and the shell command that enters the container.
+readonly IDENT_RE='^[A-Za-z0-9._-]{1,64}$'
+
+die() {
+  echo "ERROR: $*" >&2
+  exit 2
+}
+validate_ident() { [[ "$2" =~ $IDENT_RE ]] || die "$1 must match $IDENT_RE"; }
+
+usage() {
+  cat >&2 << 'EOF'
+Usage: feature-loop <TICKET> <slug>
+
+Autonomous build → verify → fix loop for the current repo. Reads ./.featureloop
+for project config (gate command, base branch, prompts). Run /spec and /plan first.
+
+Options:
+  -h, --help     show this help and exit
+  -V, --version  print version and exit
+EOF
+}
+
+NO_CONFIG=0
+ARGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    -V | --version)
+      echo "feature-loop ${FL_VERSION}"
+      exit 0
+      ;;
+    --no-config)
+      NO_CONFIG=1
+      shift
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage
+      exit 2
+      ;;
+    *)
+      ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+set -- ${ARGS[@]+"${ARGS[@]}"}
+
+TICKET="${1:-}"
+SLUG="${2:-}"
+[ -n "$TICKET" ] && [ -n "$SLUG" ] || {
+  usage
+  exit 2
+}
+
+validate_ident TICKET "$TICKET"
+validate_ident SLUG "$SLUG"
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# ---- defaults, then project config overrides them ----
+FL_BASE_BRANCH="${FL_BASE_BRANCH:-main}"
+FL_MAX_ITERS="${FL_MAX_ITERS:-5}"
+FL_PLAN_FILE="${FL_PLAN_FILE:-tasks/plan.md}"
+FL_GATES="${FL_GATES:-}"
+FL_CLAUDE="${FL_CLAUDE:-claude}"
+# shellcheck disable=SC1091
+[ "$NO_CONFIG" -eq 0 ] && [ -f "$REPO_ROOT/.featureloop" ] && . "$REPO_ROOT/.featureloop"
+
+[ -n "$FL_GATES" ] || {
+  echo "ERROR: FL_GATES is empty. Create $REPO_ROOT/.featureloop (see docs/featureloop-config.md)." >&2
+  exit 1
+}
+[ -f "$REPO_ROOT/$FL_PLAN_FILE" ] || {
+  echo "ERROR: $FL_PLAN_FILE not found in repo. Run /plan first." >&2
+  exit 1
+}
+
+FL_BUILD_PROMPT="${FL_BUILD_PROMPT:-/build Work through the pending tasks in tasks/plan.md, implementing each incrementally with tests, and commit per task on the current git branch. Do NOT push. Do NOT edit anything under tasks/.}"
+FL_TEST_PROMPT="${FL_TEST_PROMPT:-/test Review whether the changes on this branch are adequately tested against tasks/plan.md. READ-ONLY: do not modify files. If tests fail or coverage is inadequate, write tasks/failures/test.md (file:line + the fix needed); otherwise create nothing.}"
+FL_SECURITY_PROMPT="${FL_SECURITY_PROMPT:-Use the agent-skills security-and-hardening skill to audit the changes on this branch. READ-ONLY: do not modify files. Write findings to tasks/failures/security.md (severity + file:line), or nothing if clean.}"
+FL_SIMPLIFY_PROMPT="${FL_SIMPLIFY_PROMPT:-/code-simplify Simplify the changes on this branch without changing behavior. Run tests after each change and revert any that break. Do NOT edit anything under tasks/.}"
+
+GIT_COMMON_DIR="$(cd "$REPO_ROOT" && git rev-parse --git-common-dir)"
+case "$GIT_COMMON_DIR" in /*) : ;; *) GIT_COMMON_DIR="$REPO_ROOT/$GIT_COMMON_DIR" ;; esac
+WT_DIR="${FL_WT_DIR:-$REPO_ROOT/.worktrees/$TICKET}"
+BRANCH="feature/${TICKET}-${SLUG}"
+FLAGS=(--dangerously-skip-permissions)
+
+# Never let the worktree dir or runtime artifacts get committed (shared across worktrees).
+EXCLUDE="$GIT_COMMON_DIR/info/exclude"
+mkdir -p "$(dirname "$EXCLUDE")"
+touch "$EXCLUDE"
+grep -qxF '.worktrees/' "$EXCLUDE" || echo '.worktrees/' >> "$EXCLUDE"
+grep -qxF 'tasks/' "$EXCLUDE" || echo 'tasks/' >> "$EXCLUDE"
+
+git -C "$REPO_ROOT" fetch origin "$FL_BASE_BRANCH"
+[ -d "$WT_DIR" ] || git -C "$REPO_ROOT" worktree add -b "$BRANCH" "$WT_DIR" "origin/$FL_BASE_BRANCH"
+cd "$WT_DIR"
+mkdir -p tasks/logs tasks/failures
+cp "$REPO_ROOT/$FL_PLAN_FILE" tasks/plan.md
+[ -f "$REPO_ROOT/tasks/todo.md" ] && cp "$REPO_ROOT/tasks/todo.md" tasks/todo.md || true
+[ -f "$REPO_ROOT/SPEC.md" ] && cp "$REPO_ROOT/SPEC.md" SPEC.md || true
+
+# ---- status board ----
+ST_WT="pending"
+ST_BUILD="pending"
+ST_TEST="pending"
+ST_PIPE="pending"
+ST_SEC="pending"
+ST_SIMP="pending"
+ITER=0
+
+render_status() {
+  local open="none" f
+  if ls tasks/failures/*.md > /dev/null 2>&1; then
+    open=""
+    for f in tasks/failures/*.md; do open="${open}$(basename "$f") "; done
+  fi
+  cat > tasks/STATUS.md << EOF
+# ${TICKET} — feature-loop        iteration ${ITER} / ${FL_MAX_ITERS}
+
+- branch:   \`${BRANCH}\`
+- worktree: \`${WT_DIR}\`
+
+| Phase              | State       |
+|--------------------|-------------|
+| Worktree           | ${ST_WT}    |
+| Build (writer)     | ${ST_BUILD} |
+| Test               | ${ST_TEST}  |
+| Project gates      | ${ST_PIPE}  |
+| Security hardening | ${ST_SEC}   |
+| Code simplify      | ${ST_SIMP}  |
+
+Open failures: ${open}
+
+_updated $(date '+%Y-%m-%d %H:%M:%S')_
+EOF
+  printf '\n=== %s | iter %s/%s | build:%s test:%s gates:%s sec:%s simp:%s ===\n' \
+    "$TICKET" "$ITER" "$FL_MAX_ITERS" "$ST_BUILD" "$ST_TEST" "$ST_PIPE" "$ST_SEC" "$ST_SIMP"
+}
+trap render_status EXIT
+ST_WT="ready"
+render_status
+
+run_build() {
+  ST_BUILD="running"
+  render_status
+  local note=""
+  if ls tasks/failures/*.md > /dev/null 2>&1; then
+    note=" The previous iteration's gates failed — read EVERY file in tasks/failures/ and fix the root cause of each."
+  fi
+  "$FL_CLAUDE" "${FLAGS[@]}" -p "${FL_BUILD_PROMPT}${note}" > "tasks/logs/build-${ITER}.log" 2>&1 || true
+  rm -f tasks/failures/*.md
+  ST_BUILD="done (it.${ITER})"
+  render_status
+}
+
+gate_test() { "$FL_CLAUDE" "${FLAGS[@]}" -p "$FL_TEST_PROMPT" > "tasks/logs/test-${ITER}.log" 2>&1 || true; }
+gate_security() { "$FL_CLAUDE" "${FLAGS[@]}" -p "$FL_SECURITY_PROMPT" > "tasks/logs/security-${ITER}.log" 2>&1 || true; }
+
+gate_pipeline() {
+  local log="tasks/logs/gates-${ITER}.log" rc=0
+  (eval "$FL_GATES") > "$log" 2>&1 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    {
+      echo "# Project gates failed (exit ${rc})"
+      echo
+      echo "Command: \`${FL_GATES}\`"
+      echo
+      echo '```'
+      tail -n 80 "$log"
+      echo '```'
+    } > tasks/failures/pipeline.md
+  fi
+}
+
+run_gates() {
+  ST_TEST="running"
+  ST_PIPE="running"
+  ST_SEC="running"
+  render_status
+  gate_test &
+  P1=$!
+  gate_pipeline &
+  P2=$!
+  gate_security &
+  P3=$!
+  wait "$P1" "$P2" "$P3" || true
+  [ -f tasks/failures/test.md ] && ST_TEST="FAIL -> failures/test.md" || ST_TEST="pass"
+  [ -f tasks/failures/pipeline.md ] && ST_PIPE="FAIL -> failures/pipeline.md" || ST_PIPE="pass"
+  [ -f tasks/failures/security.md ] && ST_SEC="FAIL -> failures/security.md" || ST_SEC="pass"
+  render_status
+}
+
+GREEN=0
+for i in $(seq 1 "$FL_MAX_ITERS"); do
+  ITER="$i"
+  run_build
+  run_gates
+  if ! ls tasks/failures/*.md > /dev/null 2>&1; then
+    GREEN=1
+    break
+  fi
+done
+
+if [ "$GREEN" -ne 1 ]; then
+  ST_SIMP="skipped (not green after ${FL_MAX_ITERS} iters)"
+  render_status
+  echo "STOP: gates still failing after ${FL_MAX_ITERS} iterations. See tasks/failures/ and tasks/logs/." >&2
+  exit 1
+fi
+
+ST_SIMP="running"
+render_status
+"$FL_CLAUDE" "${FLAGS[@]}" -p "$FL_SIMPLIFY_PROMPT" > "tasks/logs/simplify.log" 2>&1 || true
+
+if (eval "$FL_GATES") > tasks/logs/gates-final.log 2>&1; then
+  ST_SIMP="done"
+  render_status
+  echo "DONE: ${BRANCH} is green. Review tasks/STATUS.md, then push and open the PR when ready."
+else
+  ST_SIMP="broke gates -> tasks/logs/gates-final.log"
+  render_status
+  echo "WARN: /code-simplify broke the gates. See tasks/logs/gates-final.log" >&2
+  exit 1
+fi

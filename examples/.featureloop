@@ -1,0 +1,30 @@
+# .featureloop — per-project config, sourced by feature-loop. Copy to your repo root.
+# This example mirrors a Terraform + Python + Angular service.
+
+FL_BASE_BRANCH=dev
+FL_MAX_ITERS=5
+FL_PLAN_FILE=tasks/plan.md
+
+# Authoritative gate — your local mirror of CI. Runs in the worktree; first failing
+# command stops the chain.
+FL_GATES='make test \
+  && make ruff-check \
+  && ( cd backend && uv run pytest tests/ -n auto --cov --cov-report=term-missing --cov-fail-under=80 ) \
+  && make frontend-lint \
+  && make frontend-test \
+  && make frontend-audit \
+  && make security'
+
+# Bring your own Docker — feature-loop injects claude + agent-skills + the engine on
+# top of whatever you name here. Pick ONE (or neither → a neutral public base, or pass
+# --image at run time). Your image/Dockerfile is PURE TOOLCHAIN; install tools to
+# system paths (/usr/local) so the non-root runtime user can use them.
+#
+#   FL_IMAGE=python:3.14-slim            # an existing image
+FL_DOCKERFILE=.devcontainer/Dockerfile   # a Dockerfile to build as the base
+
+# Optional prompt overrides (sensible defaults exist):
+# FL_BUILD_PROMPT='/build …'
+# FL_TEST_PROMPT='/test …'
+# FL_SECURITY_PROMPT='…security-and-hardening…'
+# FL_SIMPLIFY_PROMPT='/code-simplify …'
