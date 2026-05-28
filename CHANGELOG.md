@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `--auth oauth` on `feature-loop-docker` — use your Claude.ai / Max subscription
+  inside the container instead of API-key billing. Mounts the credentials Claude
+  Code already stores on the host (or extracts them from the macOS Keychain entry
+  `Claude Code-credentials` on the fly).
+
 ## [0.1.0] — 2026-05-27
 
 Initial release.

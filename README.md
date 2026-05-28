@@ -52,6 +52,9 @@ export PATH="$HOME/tools/feature-loop/bin:$PATH"
 # then, in any repo (bring your own image):
 ANTHROPIC_API_KEY=… feature-loop-docker PROJ-123 add-rollup-metric
 ANTHROPIC_API_KEY=… feature-loop-docker --image python:3.14-slim PROJ-123 add-rollup-metric
+
+# Use your Claude.ai / Max subscription instead of an API key:
+feature-loop-docker --auth oauth PROJ-123 add-rollup-metric
 ```
 
 **Bring your own Docker.** You name the base (an image, a Dockerfile, or `--image`);
