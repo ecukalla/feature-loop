@@ -158,8 +158,9 @@ case "$AUTH" in
       if [ "$(uname -s)" = "Darwin" ]; then
         # mktemp gives us an unpredictable name with 0600 perms, so a hostile
         # local user can't pre-create a symlink at a known path to redirect the
-        # Keychain dump.
-        FL_OAUTH_CREDS="$(mktemp -t fl-claude-creds)" ||
+        # Keychain dump. Use an explicit template (portable across BSD + GNU
+        # mktemp — GNU rejects a -t prefix without X's).
+        FL_OAUTH_CREDS="$(mktemp "${TMPDIR:-/tmp}/fl-claude-creds.XXXXXXXX")" ||
           die "couldn't create a temp file for OAuth credentials."
         security find-generic-password -s "Claude Code-credentials" -w \
           > "$FL_OAUTH_CREDS" 2> /dev/null ||
