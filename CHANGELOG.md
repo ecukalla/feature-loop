@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `--auth oauth` on macOS now extracts the Keychain credential blob to an
+  `mktemp`-named file with `0600` perms, instead of a predictable path under
+  `$TMPDIR`. Closes a symlink-attack window where a hostile local user on a
+  shared `TMPDIR` could redirect the credential write.
+
 ## [0.1.1] — 2026-05-28
 
 ### Added

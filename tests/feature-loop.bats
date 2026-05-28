@@ -189,3 +189,47 @@ setup() {
   [ "$rc" -eq 0 ]
   [ "$archive_ok" -eq 1 ]
 }
+
+# --- --auth oauth uses an unpredictable tempfile path (symlink defense) --------------
+
+@test "feature-loop-docker --auth oauth on macOS never writes to a predictable tempfile" {
+  # The predictable path ${TMPDIR:-/tmp}/fl-claude-creds.json is symlink-attackable
+  # on shared TMPDIR. With a canary file pre-existing at that path, a correct
+  # implementation (mktemp) leaves it intact; a vulnerable one clobbers it.
+  tmpdir="$(mktemp -d)"
+  canary="$tmpdir/fl-claude-creds.json"
+  echo CANARY > "$canary"
+
+  stub="$(mktemp -d)"
+  cat > "$stub/uname" << 'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  -s | "") echo Darwin ;;
+  *) /usr/bin/uname "$@" ;;
+esac
+EOF
+  cat > "$stub/security" << 'EOF'
+#!/usr/bin/env bash
+echo '{"fake":"oauth-creds"}'
+EOF
+  cat > "$stub/docker" << 'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$stub/uname" "$stub/security" "$stub/docker"
+
+  work="$(mktemp -d)"
+  (
+    cd "$work" || exit 1
+    git init -q
+    echo 'FL_GATES=true' > .featureloop
+    TMPDIR="$tmpdir" PATH="$stub:$PATH" FL_OAUTH_CREDS=/nonexistent \
+      "$FLD" --auth oauth TKT slug
+  ) > /dev/null 2>&1
+
+  canary_intact=0
+  [ "$(cat "$canary" 2> /dev/null)" = "CANARY" ] && canary_intact=1
+
+  rm -rf "$tmpdir" "$stub" "$work"
+  [ "$canary_intact" -eq 1 ]
+}
