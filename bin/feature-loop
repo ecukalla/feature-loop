@@ -91,11 +91,15 @@ FL_CLAUDE="${FL_CLAUDE:-claude}"
 # Where this run's artefacts (status, logs, summary, retrospective) are archived so
 # they survive worktree teardown. The docker runner bind-mounts the host's
 # $HOME/.feature-loop into /home/fluser/.feature-loop so the archive lands on the host.
+# Env wins over .featureloop here: the runner sets this via -e to pin the in-container
+# path to the bind-mount target, and a .featureloop value would otherwise clobber it.
+_FL_ARCHIVE_DIR_ENV="${FL_ARCHIVE_DIR-}"
 FL_ARCHIVE_DIR="${FL_ARCHIVE_DIR:-$HOME/.feature-loop}"
 # Set FL_RETROSPECTIVE=0 to skip the post-run Claude reflection (saves one API call).
 FL_RETROSPECTIVE="${FL_RETROSPECTIVE:-1}"
 # shellcheck disable=SC1091
 [ "$NO_CONFIG" -eq 0 ] && [ -f "$REPO_ROOT/.featureloop" ] && . "$REPO_ROOT/.featureloop"
+[ -n "$_FL_ARCHIVE_DIR_ENV" ] && FL_ARCHIVE_DIR="$_FL_ARCHIVE_DIR_ENV"
 
 [ -n "$FL_GATES" ] || {
   echo "ERROR: FL_GATES is empty. Create $REPO_ROOT/.featureloop (see docs/featureloop-config.md)." >&2

@@ -12,6 +12,14 @@ All notable changes to this project are documented here. The format follows
   `mktemp`-named file with `0600` perms, instead of a predictable path under
   `$TMPDIR`. Closes a symlink-attack window where a hostile local user on a
   shared `TMPDIR` could redirect the credential write.
+- `FL_ARCHIVE_DIR` set in `.featureloop` is now honored end-to-end. The host
+  runner reads it as the host-side path, bind-mounts it into the container at
+  `/home/fluser/.feature-loop`, and forces the engine's in-container
+  `FL_ARCHIVE_DIR` to that target via `-e`. Previously, a custom
+  `FL_ARCHIVE_DIR` in `.featureloop` was silently lost on container teardown
+  because the engine wrote to an unmounted path. Inside the engine, env now
+  wins over `.featureloop` for this variable so the runner's pin is
+  authoritative. The undocumented `FL_HOST_ARCHIVE_DIR` knob is removed.
 
 ## [0.1.1] — 2026-05-28
 

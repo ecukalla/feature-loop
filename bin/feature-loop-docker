@@ -221,15 +221,17 @@ echo "==> running feature-loop for ${TICKET} (${SLUG})"
 # Pass TICKET and SLUG as positional args, not via shell interpolation — even with
 # IDENT_RE blocking quotes, the positional form removes the dependency on regex
 # correctness for safety (defense in depth).
-# Ensure the host archive dir exists, then mount it into the container so each run's
-# logs, summary.json, and retrospective survive worktree teardown.
-FL_HOST_ARCHIVE_DIR="${FL_HOST_ARCHIVE_DIR:-$HOME/.feature-loop}"
-mkdir -p "$FL_HOST_ARCHIVE_DIR"
+# FL_ARCHIVE_DIR is the host-side path (from .featureloop or env); the bind-mount and
+# the `-e` override together guarantee the engine inside the container writes into the
+# mount regardless of what .featureloop sets.
+FL_ARCHIVE_DIR="${FL_ARCHIVE_DIR:-$HOME/.feature-loop}"
+mkdir -p "$FL_ARCHIVE_DIR"
 
 exec docker run --rm -i $TTY \
   "${DOCKER_AUTH_ARGS[@]}" \
+  -e FL_ARCHIVE_DIR=/home/fluser/.feature-loop \
   -v "$REPO_ROOT:/workspace" -w /workspace \
-  -v "$FL_HOST_ARCHIVE_DIR:/home/fluser/.feature-loop:rw" \
+  -v "$FL_ARCHIVE_DIR:/home/fluser/.feature-loop:rw" \
   "$RUN_IMAGE" \
   bash -c 'git config --global --add safe.directory "*" && exec feature-loop "$1" "$2"' \
   feature-loop-entry "$TICKET" "$SLUG"
