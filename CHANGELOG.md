@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-05-28
+
 ### Added
 
 - `--auth oauth` on `feature-loop-docker` — use your Claude.ai / Max subscription
@@ -69,4 +71,6 @@ Initial release.
 - `.editorconfig`, `.gitattributes`, `.shellcheckrc`, `.markdownlint.yaml`.
 - GitHub issue forms, PR template, `CODEOWNERS`.
 
+[Unreleased]: https://github.com/ecukalla/feature-loop/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/ecukalla/feature-loop/releases/tag/v0.1.1
 [0.1.0]: https://github.com/ecukalla/feature-loop/releases/tag/v0.1.0
