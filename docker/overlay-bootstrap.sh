@@ -8,7 +8,7 @@
 # base (apt). For non-apt bases, pre-bake these yourself or use an apt-based image.
 set -eu
 
-NODE_VERSION="${NODE_VERSION:-22.15.0}"
+NODE_VERSION="${NODE_VERSION:-22.20.0}"
 # Pinned agent-skills commit (override to move it). Installed from a local clone, so
 # `claude plugin install` never clones from github (slim images have no ssh client).
 AGENT_SKILLS_REF="${AGENT_SKILLS_REF:-7338cf0a5a9557275e3cd8dc520002e59215e0a7}"

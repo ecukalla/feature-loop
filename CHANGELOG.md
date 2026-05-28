@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Bump `docker/overlay-bootstrap.sh` default `NODE_VERSION` from `22.15.0` to `22.20.0` so npm-based pre-commit hooks (e.g. `markdownlint-cli`, which pulls `ava@7` requiring node â‰".20) install cleanly in the overlay without users having to override `NODE_VERSION`. Closes #12.
+
 ### Added
 
 - `scripts/lint-plugin-manifests.sh` catches manifest defects that
