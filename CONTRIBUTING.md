@@ -5,7 +5,7 @@ Claude plugin — so the bar is simple: keep it simple, tested, and lint-clean.
 
 ## Development setup
 
-Requirements: `bash`, `git`, [`pre-commit`](https://pre-commit.com),
+Requirements: `bash`, `git`, `jq`, [`pre-commit`](https://pre-commit.com),
 [`bats`](https://github.com/bats-core/bats-core), and (for end-to-end runs) `docker`.
 
 ```bash

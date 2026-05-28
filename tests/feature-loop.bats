@@ -8,6 +8,7 @@ setup() {
   REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
   FL="$REPO_ROOT/bin/feature-loop"
   FLD="$REPO_ROOT/bin/feature-loop-docker"
+  LINT="$REPO_ROOT/scripts/lint-plugin-manifests.sh"
 }
 
 @test "feature-loop --version prints a version" {
@@ -314,4 +315,48 @@ EOF
   [ "$rc" -eq 0 ]
   [ "$env_used" -eq 1 ]
   [ "$cfg_used" -eq 0 ]
+}
+
+# --- stricter manifest lint (issue #8): semver + source-path checks ------------------
+
+@test "lint-plugin-manifests passes on the repo's own manifests" {
+  run "$LINT"
+  [ "$status" -eq 0 ]
+}
+
+@test "lint-plugin-manifests rejects a non-semver version in plugin.json" {
+  tmp="$(mktemp -d)"
+  mkdir "$tmp/.claude-plugin"
+  jq '.version = "not-semver"' "$REPO_ROOT/.claude-plugin/plugin.json" \
+    > "$tmp/.claude-plugin/plugin.json"
+  cp "$REPO_ROOT/.claude-plugin/marketplace.json" "$tmp/.claude-plugin/marketplace.json"
+  run "$LINT" "$tmp"
+  rm -rf "$tmp"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not valid semver"* ]]
+}
+
+@test "lint-plugin-manifests rejects a non-semver version in a marketplace plugin entry" {
+  tmp="$(mktemp -d)"
+  mkdir "$tmp/.claude-plugin"
+  cp "$REPO_ROOT/.claude-plugin/plugin.json" "$tmp/.claude-plugin/plugin.json"
+  jq '.plugins[0].version = "v1.0"' "$REPO_ROOT/.claude-plugin/marketplace.json" \
+    > "$tmp/.claude-plugin/marketplace.json"
+  run "$LINT" "$tmp"
+  rm -rf "$tmp"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"not valid semver"* ]]
+}
+
+@test "lint-plugin-manifests rejects a marketplace source path that does not resolve" {
+  tmp="$(mktemp -d)"
+  mkdir "$tmp/.claude-plugin"
+  cp "$REPO_ROOT/.claude-plugin/plugin.json" "$tmp/.claude-plugin/plugin.json"
+  jq '.plugins[0].source = "./does-not-exist"' \
+    "$REPO_ROOT/.claude-plugin/marketplace.json" \
+    > "$tmp/.claude-plugin/marketplace.json"
+  run "$LINT" "$tmp"
+  rm -rf "$tmp"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"does not resolve"* ]]
 }

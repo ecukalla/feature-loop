@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/lint-plugin-manifests.sh` catches manifest defects that
+  `claude plugin validate --strict` misses: non-semver `version` in
+  `plugin.json` or `marketplace.json:.plugins[]`, and marketplace
+  `source` paths that don't resolve on disk. Wired into both
+  `pre-commit` (runs when `.claude-plugin/*.json` changes) and the
+  `validate-plugin` CI job. Closes #8. Requires `jq`.
+
 ## [0.1.2] — 2026-05-28
 
 ### Fixed

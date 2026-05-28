@@ -55,3 +55,6 @@ jobs:
       # required field on the plugin or marketplace manifest fails the build.
       - run: claude plugin validate --strict .claude-plugin/marketplace.json
       - run: claude plugin validate --strict .claude-plugin/plugin.json
+      # Catch the defects --strict misses: non-semver versions and unresolved
+      # marketplace source paths. See scripts/lint-plugin-manifests.sh.
+      - run: scripts/lint-plugin-manifests.sh
