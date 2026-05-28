@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Engine `build`/`test`/`simplify` phases now invoke their agent-skills skills by
+  name (`incremental-implementation`, `test-driven-development`,
+  `code-simplification`) instead of the `/build`, `/test`, `/code-simplify` slash
+  commands. Those are agent-skills *project* commands that don't load in the headless
+  plugin container, so the writer ran as `Unknown command`, made no edits, and the
+  loop could never converge or commit. The `security` phase already used the working
+  skill-by-name form. Closes #19.
+
 ## [0.1.3] — 2026-05-28
 
 ### Changed

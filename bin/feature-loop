@@ -110,10 +110,10 @@ FL_RETROSPECTIVE="${FL_RETROSPECTIVE:-1}"
   exit 1
 }
 
-FL_BUILD_PROMPT="${FL_BUILD_PROMPT:-/build Work through the pending tasks in tasks/plan.md, implementing each incrementally with tests, and commit per task on the current git branch. Do NOT push. Do NOT edit anything under tasks/.}"
-FL_TEST_PROMPT="${FL_TEST_PROMPT:-/test Review whether the changes on this branch are adequately tested against tasks/plan.md. READ-ONLY: do not modify files. If tests fail or coverage is inadequate, write tasks/failures/test.md (file:line + the fix needed); otherwise create nothing.}"
+FL_BUILD_PROMPT="${FL_BUILD_PROMPT:-Use the agent-skills incremental-implementation skill to work through the pending tasks in tasks/plan.md, implementing each incrementally with tests, and commit per task on the current git branch. Do NOT push. Do NOT edit anything under tasks/.}"
+FL_TEST_PROMPT="${FL_TEST_PROMPT:-Use the agent-skills test-driven-development skill to review whether the changes on this branch are adequately tested against tasks/plan.md. READ-ONLY: do not modify files. If tests fail or coverage is inadequate, write tasks/failures/test.md (file:line + the fix needed); otherwise create nothing.}"
 FL_SECURITY_PROMPT="${FL_SECURITY_PROMPT:-Use the agent-skills security-and-hardening skill to audit the changes on this branch. READ-ONLY: do not modify files. Write findings to tasks/failures/security.md (severity + file:line), or nothing if clean.}"
-FL_SIMPLIFY_PROMPT="${FL_SIMPLIFY_PROMPT:-/code-simplify Simplify the changes on this branch without changing behavior. Run tests after each change and revert any that break. Do NOT edit anything under tasks/.}"
+FL_SIMPLIFY_PROMPT="${FL_SIMPLIFY_PROMPT:-Use the agent-skills code-simplification skill to simplify the changes on this branch without changing behavior. Run tests after each change and revert any that break. Do NOT edit anything under tasks/.}"
 FL_RETROSPECTIVE_PROMPT="${FL_RETROSPECTIVE_PROMPT:-Read tasks/STATUS.md and every file under tasks/logs/ and tasks/failures/. Write a concise retrospective to tasks/retrospective.md with three sections: ## What went well / ## What needed fixing (and what worked) / ## What should improve next run. Bullet points, no preamble.}"
 
 GIT_COMMON_DIR="$(cd "$REPO_ROOT" && git rev-parse --git-common-dir)"
