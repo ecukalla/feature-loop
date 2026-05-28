@@ -17,7 +17,7 @@
 # Usage: feature-loop <TICKET> <slug>
 set -euo pipefail
 
-readonly FL_VERSION="0.1.2"
+readonly FL_VERSION="0.1.3"
 # Conservative identifier — TICKET/SLUG end up in branch names, paths, image tags,
 # and the shell command that enters the container.
 readonly IDENT_RE='^[A-Za-z0-9._-]{1,64}$'
