@@ -360,3 +360,16 @@ EOF
   [ "$status" -eq 1 ]
   [[ "$output" == *"does not resolve"* ]]
 }
+
+# --- regression: headless engine prompts must use skills, not slash-commands (#19) ---
+
+@test "engine default prompts invoke agent-skills skills, not slash-commands" {
+  # /build, /test, /code-simplify are agent-skills *project* commands that don't load
+  # in the headless plugin container, so the writer no-opped ("Unknown command") and
+  # the loop never committed. The default prompts must reference the backing skills.
+  run grep -nE ':-/(build|test|code-simplify)' "$FL"
+  [ "$status" -ne 0 ]
+  grep -q 'incremental-implementation skill' "$FL"
+  grep -q 'test-driven-development skill' "$FL"
+  grep -q 'code-simplification skill' "$FL"
+}
