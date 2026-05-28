@@ -156,12 +156,15 @@ case "$AUTH" in
     FL_OAUTH_CREDS="${FL_OAUTH_CREDS:-$HOME/.claude/.credentials.json}"
     if [ ! -s "$FL_OAUTH_CREDS" ]; then
       if [ "$(uname -s)" = "Darwin" ]; then
-        FL_OAUTH_CREDS="${TMPDIR:-/tmp}/fl-claude-creds.json"
-        umask 077
+        # mktemp gives us an unpredictable name with 0600 perms, so a hostile
+        # local user can't pre-create a symlink at a known path to redirect the
+        # Keychain dump. Use an explicit template (portable across BSD + GNU
+        # mktemp — GNU rejects a -t prefix without X's).
+        FL_OAUTH_CREDS="$(mktemp "${TMPDIR:-/tmp}/fl-claude-creds.XXXXXXXX")" ||
+          die "couldn't create a temp file for OAuth credentials."
         security find-generic-password -s "Claude Code-credentials" -w \
           > "$FL_OAUTH_CREDS" 2> /dev/null ||
           die "couldn't read 'Claude Code-credentials' from macOS Keychain — run 'claude /login' first, or set FL_OAUTH_CREDS to a credentials file path."
-        chmod 600 "$FL_OAUTH_CREDS"
       else
         die "--auth oauth: no credentials at $FL_OAUTH_CREDS. Run 'claude /login' on the host first, or set FL_OAUTH_CREDS."
       fi
@@ -219,15 +222,17 @@ echo "==> running feature-loop for ${TICKET} (${SLUG})"
 # Pass TICKET and SLUG as positional args, not via shell interpolation — even with
 # IDENT_RE blocking quotes, the positional form removes the dependency on regex
 # correctness for safety (defense in depth).
-# Ensure the host archive dir exists, then mount it into the container so each run's
-# logs, summary.json, and retrospective survive worktree teardown.
-FL_HOST_ARCHIVE_DIR="${FL_HOST_ARCHIVE_DIR:-$HOME/.feature-loop}"
-mkdir -p "$FL_HOST_ARCHIVE_DIR"
+# FL_ARCHIVE_DIR is the host-side path (from .featureloop or env); the bind-mount and
+# the `-e` override together guarantee the engine inside the container writes into the
+# mount regardless of what .featureloop sets.
+FL_ARCHIVE_DIR="${FL_ARCHIVE_DIR:-$HOME/.feature-loop}"
+mkdir -p "$FL_ARCHIVE_DIR"
 
 exec docker run --rm -i $TTY \
   "${DOCKER_AUTH_ARGS[@]}" \
+  -e FL_ARCHIVE_DIR=/home/fluser/.feature-loop \
   -v "$REPO_ROOT:/workspace" -w /workspace \
-  -v "$FL_HOST_ARCHIVE_DIR:/home/fluser/.feature-loop:rw" \
+  -v "$FL_ARCHIVE_DIR:/home/fluser/.feature-loop:rw" \
   "$RUN_IMAGE" \
   bash -c 'git config --global --add safe.directory "*" && exec feature-loop "$1" "$2"' \
   feature-loop-entry "$TICKET" "$SLUG"

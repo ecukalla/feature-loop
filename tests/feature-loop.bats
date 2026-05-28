@@ -189,3 +189,129 @@ setup() {
   [ "$rc" -eq 0 ]
   [ "$archive_ok" -eq 1 ]
 }
+
+# --- --auth oauth uses an unpredictable tempfile path (symlink defense) --------------
+
+@test "feature-loop-docker --auth oauth on macOS never writes to a predictable tempfile" {
+  # The predictable path ${TMPDIR:-/tmp}/fl-claude-creds.json is symlink-attackable
+  # on shared TMPDIR. With a canary file pre-existing at that path, a correct
+  # implementation (mktemp) leaves it intact; a vulnerable one clobbers it.
+  tmpdir="$(mktemp -d)"
+  canary="$tmpdir/fl-claude-creds.json"
+  echo CANARY > "$canary"
+
+  stub="$(mktemp -d)"
+  cat > "$stub/uname" << 'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  -s | "") echo Darwin ;;
+  *) /usr/bin/uname "$@" ;;
+esac
+EOF
+  cat > "$stub/security" << 'EOF'
+#!/usr/bin/env bash
+echo '{"fake":"oauth-creds"}'
+EOF
+  cat > "$stub/docker" << 'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$stub/uname" "$stub/security" "$stub/docker"
+
+  work="$(mktemp -d)"
+  (
+    cd "$work" || exit 1
+    git init -q
+    echo 'FL_GATES=true' > .featureloop
+    TMPDIR="$tmpdir" PATH="$stub:$PATH" FL_OAUTH_CREDS=/nonexistent \
+      "$FLD" --auth oauth TKT slug
+  ) > /dev/null 2>&1
+
+  canary_intact=0
+  [ "$(cat "$canary" 2> /dev/null)" = "CANARY" ] && canary_intact=1
+
+  rm -rf "$tmpdir" "$stub" "$work"
+  [ "$canary_intact" -eq 1 ]
+}
+
+# --- FL_ARCHIVE_DIR coupling between host runner and in-container engine -------------
+
+@test "feature-loop-docker bind-mounts FL_ARCHIVE_DIR from .featureloop and pins the in-container path" {
+  # When .featureloop sets FL_ARCHIVE_DIR=/custom, the runner must (a) bind-mount
+  # /custom into the container, and (b) pass -e FL_ARCHIVE_DIR=/home/fluser/.feature-loop
+  # so the engine writes into the mount instead of the user-supplied host path
+  # (which doesn't exist in the container's filesystem).
+  tmp="$(mktemp -d)"
+  custom="$tmp/my-archive"
+
+  stub="$(mktemp -d)"
+  cat > "$stub/docker" << EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$tmp/docker.log"
+echo --- >> "$tmp/docker.log"
+exit 0
+EOF
+  chmod +x "$stub/docker"
+
+  (
+    cd "$tmp" || exit 1
+    git init -q
+    cat > .featureloop << EOF
+FL_GATES=true
+FL_ARCHIVE_DIR=$custom
+EOF
+    PATH="$stub:$PATH" ANTHROPIC_API_KEY=sk-test "$FLD" TKT slug
+  ) > /dev/null 2>&1
+
+  bind_ok=0
+  env_ok=0
+  archive_created=0
+  grep -qF "$custom:/home/fluser/.feature-loop" "$tmp/docker.log" && bind_ok=1
+  grep -qF "FL_ARCHIVE_DIR=/home/fluser/.feature-loop" "$tmp/docker.log" && env_ok=1
+  [ -d "$custom" ] && archive_created=1
+
+  rm -rf "$tmp" "$stub"
+  [ "$bind_ok" -eq 1 ]
+  [ "$env_ok" -eq 1 ]
+  [ "$archive_created" -eq 1 ]
+}
+
+@test "feature-loop engine prefers FL_ARCHIVE_DIR from env over .featureloop value" {
+  # The docker runner pins the in-container FL_ARCHIVE_DIR via `-e`. That pin
+  # only works if env wins over .featureloop inside the engine.
+  tmp="$(mktemp -d)"
+  env_archive="$tmp/env-archive"
+  cfg_archive="$tmp/cfg-archive"
+
+  (
+    cd "$tmp" || exit 1
+    git init --bare -q upstream.git
+    git init -q -b main work
+    cd work || exit 1
+    cat > .featureloop << EOF
+FL_GATES=true
+FL_ARCHIVE_DIR=$cfg_archive
+EOF
+    mkdir tasks
+    echo 'todo' > tasks/plan.md
+    echo x > README.md
+    git add -A
+    git -c user.email=t@t -c user.name=t commit -qm init
+    git remote add origin ../upstream.git
+    git push -q origin main
+    FL_CLAUDE=true FL_MAX_ITERS=1 FL_ARCHIVE_DIR="$env_archive" \
+      FL_BASE_BRANCH=main FL_RETROSPECTIVE=0 \
+      "$FL" TKT slug
+  ) > /dev/null 2>&1
+  rc=$?
+
+  env_used=0
+  cfg_used=0
+  ls "$env_archive/runs"/TKT-*/summary.json > /dev/null 2>&1 && env_used=1
+  ls "$cfg_archive/runs"/TKT-*/summary.json > /dev/null 2>&1 && cfg_used=1
+
+  rm -rf "$tmp"
+  [ "$rc" -eq 0 ]
+  [ "$env_used" -eq 1 ]
+  [ "$cfg_used" -eq 0 ]
+}

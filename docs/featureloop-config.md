@@ -16,7 +16,7 @@ to start.
 | `FL_IMAGE` | *(unset)* | **Bring your own image** — an existing image to use as the base. |
 | `FL_DOCKERFILE` | `.devcontainer/Dockerfile` | A Dockerfile to build as the base, if `FL_IMAGE` is unset. |
 | `FL_BUILD_PROMPT` / `FL_TEST_PROMPT` / `FL_SECURITY_PROMPT` / `FL_SIMPLIFY_PROMPT` / `FL_RETROSPECTIVE_PROMPT` | sensible defaults | Override the prompt for any phase. |
-| `FL_ARCHIVE_DIR` | `$HOME/.feature-loop` | Where each run is archived (`runs/<RUN_ID>/`). The docker runner bind-mounts the host's `$HOME/.feature-loop` into the container at this path so artefacts survive worktree teardown. |
+| `FL_ARCHIVE_DIR` | `$HOME/.feature-loop` | Where each run is archived (`runs/<RUN_ID>/`). Read on the host; the docker runner bind-mounts this host path into the container at `/home/fluser/.feature-loop` and pins the engine's in-container `FL_ARCHIVE_DIR` to that target, so any value set here survives worktree teardown. Env wins over `.featureloop` for this var. |
 | `FL_RETROSPECTIVE` | `1` | Set to `0` to skip the post-run Claude reflection (saves one API call per run). |
 
 ## Per-run archive
