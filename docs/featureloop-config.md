@@ -15,7 +15,32 @@ to start.
 | `FL_WT_DIR` | `<repo>/.worktrees/<TICKET>` | Worktree location. |
 | `FL_IMAGE` | *(unset)* | **Bring your own image** — an existing image to use as the base. |
 | `FL_DOCKERFILE` | `.devcontainer/Dockerfile` | A Dockerfile to build as the base, if `FL_IMAGE` is unset. |
-| `FL_BUILD_PROMPT` / `FL_TEST_PROMPT` / `FL_SECURITY_PROMPT` / `FL_SIMPLIFY_PROMPT` | sensible defaults | Override the prompt for any phase. |
+| `FL_BUILD_PROMPT` / `FL_TEST_PROMPT` / `FL_SECURITY_PROMPT` / `FL_SIMPLIFY_PROMPT` / `FL_RETROSPECTIVE_PROMPT` | sensible defaults | Override the prompt for any phase. |
+| `FL_ARCHIVE_DIR` | `$HOME/.feature-loop` | Where each run is archived (`runs/<RUN_ID>/`). The docker runner bind-mounts the host's `$HOME/.feature-loop` into the container at this path so artefacts survive worktree teardown. |
+| `FL_RETROSPECTIVE` | `1` | Set to `0` to skip the post-run Claude reflection (saves one API call per run). |
+
+## Per-run archive
+
+After every run (success or failure), the engine copies its artefacts to a
+date-stamped directory under `$FL_ARCHIVE_DIR/runs/`, and appends a row to a
+cross-run `INDEX.md`. Layout:
+
+```text
+$HOME/.feature-loop/
+├── INDEX.md                          # one row per run; quick "show me all my runs"
+└── runs/
+    └── <TICKET>-<UTC-timestamp>/
+        ├── summary.json              # machine-readable: outcome, duration, iters
+        ├── summary.md                # human-readable one-pager
+        ├── STATUS.md                 # final state board (copied from the worktree)
+        ├── retrospective.md          # what worked, what was fixed, what to improve
+        ├── diff.stat                 # `git diff --stat origin/<base>..HEAD`
+        ├── logs/                     # every build/test/gates/security/simplify log
+        └── failures/                 # any failure markdown still present at exit
+```
+
+The retrospective is one extra Claude call at the end; set `FL_RETROSPECTIVE=0`
+to skip it.
 
 ## Bring your own Docker
 

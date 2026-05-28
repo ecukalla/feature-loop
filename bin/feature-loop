@@ -88,6 +88,12 @@ FL_MAX_ITERS="${FL_MAX_ITERS:-5}"
 FL_PLAN_FILE="${FL_PLAN_FILE:-tasks/plan.md}"
 FL_GATES="${FL_GATES:-}"
 FL_CLAUDE="${FL_CLAUDE:-claude}"
+# Where this run's artefacts (status, logs, summary, retrospective) are archived so
+# they survive worktree teardown. The docker runner bind-mounts the host's
+# $HOME/.feature-loop into /home/fluser/.feature-loop so the archive lands on the host.
+FL_ARCHIVE_DIR="${FL_ARCHIVE_DIR:-$HOME/.feature-loop}"
+# Set FL_RETROSPECTIVE=0 to skip the post-run Claude reflection (saves one API call).
+FL_RETROSPECTIVE="${FL_RETROSPECTIVE:-1}"
 # shellcheck disable=SC1091
 [ "$NO_CONFIG" -eq 0 ] && [ -f "$REPO_ROOT/.featureloop" ] && . "$REPO_ROOT/.featureloop"
 
@@ -104,12 +110,20 @@ FL_BUILD_PROMPT="${FL_BUILD_PROMPT:-/build Work through the pending tasks in tas
 FL_TEST_PROMPT="${FL_TEST_PROMPT:-/test Review whether the changes on this branch are adequately tested against tasks/plan.md. READ-ONLY: do not modify files. If tests fail or coverage is inadequate, write tasks/failures/test.md (file:line + the fix needed); otherwise create nothing.}"
 FL_SECURITY_PROMPT="${FL_SECURITY_PROMPT:-Use the agent-skills security-and-hardening skill to audit the changes on this branch. READ-ONLY: do not modify files. Write findings to tasks/failures/security.md (severity + file:line), or nothing if clean.}"
 FL_SIMPLIFY_PROMPT="${FL_SIMPLIFY_PROMPT:-/code-simplify Simplify the changes on this branch without changing behavior. Run tests after each change and revert any that break. Do NOT edit anything under tasks/.}"
+FL_RETROSPECTIVE_PROMPT="${FL_RETROSPECTIVE_PROMPT:-Read tasks/STATUS.md and every file under tasks/logs/ and tasks/failures/. Write a concise retrospective to tasks/retrospective.md with three sections: ## What went well / ## What needed fixing (and what worked) / ## What should improve next run. Bullet points, no preamble.}"
 
 GIT_COMMON_DIR="$(cd "$REPO_ROOT" && git rev-parse --git-common-dir)"
 case "$GIT_COMMON_DIR" in /*) : ;; *) GIT_COMMON_DIR="$REPO_ROOT/$GIT_COMMON_DIR" ;; esac
 WT_DIR="${FL_WT_DIR:-$REPO_ROOT/.worktrees/$TICKET}"
 BRANCH="feature/${TICKET}-${SLUG}"
 FLAGS=(--dangerously-skip-permissions)
+
+# Run identity + timing — set before the EXIT trap so the archive captures everything,
+# even an unexpected early exit.
+RUN_ID="${TICKET}-$(date -u +%Y%m%dT%H%M%SZ)"
+RUN_START_EPOCH="$(date +%s)"
+RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+OUTCOME="unknown"
 
 # Never let the worktree dir or runtime artifacts get committed (shared across worktrees).
 EXCLUDE="$GIT_COMMON_DIR/info/exclude"
@@ -163,7 +177,83 @@ EOF
   printf '\n=== %s | iter %s/%s | build:%s test:%s gates:%s sec:%s simp:%s ===\n' \
     "$TICKET" "$ITER" "$FL_MAX_ITERS" "$ST_BUILD" "$ST_TEST" "$ST_PIPE" "$ST_SEC" "$ST_SIMP"
 }
-trap render_status EXIT
+run_retrospective() {
+  [ "$FL_RETROSPECTIVE" = "0" ] && return 0
+  "$FL_CLAUDE" "${FLAGS[@]}" -p "$FL_RETROSPECTIVE_PROMPT" \
+    > "tasks/logs/retrospective.log" 2>&1 || true
+}
+
+archive_run() {
+  local outcome="${1:-unknown}"
+  local end_epoch duration arc_dir idx
+  end_epoch="$(date +%s)"
+  duration=$((end_epoch - RUN_START_EPOCH))
+  arc_dir="$FL_ARCHIVE_DIR/runs/$RUN_ID"
+  mkdir -p "$arc_dir" 2> /dev/null || return 0
+
+  # Carry the artefacts that survive worktree teardown.
+  [ -f tasks/STATUS.md ] && cp tasks/STATUS.md "$arc_dir/" 2> /dev/null || true
+  [ -f tasks/retrospective.md ] && cp tasks/retrospective.md "$arc_dir/" 2> /dev/null || true
+  [ -d tasks/logs ] && cp -R tasks/logs "$arc_dir/" 2> /dev/null || true
+  [ -d tasks/failures ] && cp -R tasks/failures "$arc_dir/" 2> /dev/null || true
+
+  # Per-file diff stat so you see what changed without checking out the branch.
+  git diff --stat "origin/$FL_BASE_BRANCH"..HEAD > "$arc_dir/diff.stat" 2> /dev/null || true
+
+  # Machine-readable summary.
+  cat > "$arc_dir/summary.json" << EOF
+{
+  "run_id":         "$RUN_ID",
+  "ticket":         "$TICKET",
+  "slug":           "$SLUG",
+  "branch":         "$BRANCH",
+  "base_branch":    "$FL_BASE_BRANCH",
+  "outcome":        "$outcome",
+  "iterations":     $ITER,
+  "max_iterations": $FL_MAX_ITERS,
+  "duration_sec":   $duration,
+  "started_at":     "$RUN_STARTED_AT",
+  "ended_at":       "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+
+  # Human-readable one-pager.
+  {
+    echo "# Run $RUN_ID"
+    echo
+    echo "- Ticket:      \`$TICKET\`"
+    echo "- Slug:        \`$SLUG\`"
+    echo "- Branch:      \`$BRANCH\`"
+    echo "- Base branch: \`$FL_BASE_BRANCH\`"
+    echo "- Outcome:     **$outcome**"
+    echo "- Iterations:  $ITER / $FL_MAX_ITERS"
+    echo "- Duration:    ${duration}s"
+    echo "- Started:     $RUN_STARTED_AT"
+    echo "- Ended:       $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo
+    echo "See \`STATUS.md\`, \`retrospective.md\`, and \`logs/\` in this directory."
+  } > "$arc_dir/summary.md"
+
+  # Append a row to the cross-run INDEX.
+  idx="$FL_ARCHIVE_DIR/INDEX.md"
+  if [ ! -f "$idx" ]; then
+    {
+      echo "# feature-loop runs"
+      echo
+      echo "| Run ID | Outcome | Iter | Duration | Branch |"
+      echo "|--------|---------|------|----------|--------|"
+    } > "$idx"
+  fi
+  printf "| %s | %s | %s/%s | %ss | %s |\n" \
+    "$RUN_ID" "$outcome" "$ITER" "$FL_MAX_ITERS" "$duration" "$BRANCH" >> "$idx"
+}
+
+on_exit() {
+  render_status 2> /dev/null || true
+  run_retrospective || true
+  archive_run "${OUTCOME:-unknown}" || true
+}
+trap on_exit EXIT
 ST_WT="ready"
 render_status
 
@@ -232,6 +322,7 @@ if [ "$GREEN" -ne 1 ]; then
   ST_SIMP="skipped (not green after ${FL_MAX_ITERS} iters)"
   render_status
   echo "STOP: gates still failing after ${FL_MAX_ITERS} iterations. See tasks/failures/ and tasks/logs/." >&2
+  OUTCOME="not-green"
   exit 1
 fi
 
@@ -243,9 +334,11 @@ if (eval "$FL_GATES") > tasks/logs/gates-final.log 2>&1; then
   ST_SIMP="done"
   render_status
   echo "DONE: ${BRANCH} is green. Review tasks/STATUS.md, then push and open the PR when ready."
+  OUTCOME="green"
 else
   ST_SIMP="broke gates -> tasks/logs/gates-final.log"
   render_status
   echo "WARN: /code-simplify broke the gates. See tasks/logs/gates-final.log" >&2
+  OUTCOME="broke-simplify"
   exit 1
 fi

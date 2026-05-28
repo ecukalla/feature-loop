@@ -12,6 +12,15 @@ All notable changes to this project are documented here. The format follows
   inside the container instead of API-key billing. Mounts the credentials Claude
   Code already stores on the host (or extracts them from the macOS Keychain entry
   `Claude Code-credentials` on the fly).
+- Per-run archive at `$FL_ARCHIVE_DIR` (default `$HOME/.feature-loop`) — after
+  every run, the engine writes a date-stamped directory containing
+  `summary.json`, `summary.md`, `STATUS.md`, `retrospective.md`, `diff.stat`,
+  `logs/`, and `failures/`, plus a row appended to a cross-run `INDEX.md`.
+  The docker runner bind-mounts the host's `~/.feature-loop` into the container
+  so artefacts survive worktree teardown.
+- Optional retrospective phase: one final Claude call writes a "what went well /
+  what needed fixing / what to improve" markdown to `tasks/retrospective.md`.
+  Skip with `FL_RETROSPECTIVE=0`.
 
 ## [0.1.0] — 2026-05-27
 
