@@ -114,6 +114,14 @@ setup() {
   [[ "$output" != *"invalid image"* ]]
 }
 
+# --- --auth flag --------------------------------------------------------------------
+
+@test "feature-loop-docker rejects an invalid --auth value" {
+  run "$FLD" --auth nope valid valid
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"invalid --auth"* ]]
+}
+
 # --- I1: --no-config flag skips sourcing .featureloop --------------------------------
 
 @test "feature-loop accepts --no-config" {
