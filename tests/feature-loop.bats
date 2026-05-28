@@ -153,3 +153,39 @@ setup() {
   rm -rf "$tmp"
   [ "$rc" -eq 0 ]
 }
+
+# --- traceability: per-run archive at FL_ARCHIVE_DIR ---------------------------------
+
+@test "feature-loop archives the run to FL_ARCHIVE_DIR on completion" {
+  tmp="$(mktemp -d)"
+  archive="$tmp/archive"
+  (
+    cd "$tmp" || exit 1
+    git init --bare -q upstream.git
+    git init -q -b main work
+    cd work || exit 1
+    echo 'FL_GATES=true' > .featureloop
+    mkdir tasks
+    echo 'todo' > tasks/plan.md
+    echo x > README.md
+    git add -A
+    git -c user.email=t@t -c user.name=t commit -qm init
+    git remote add origin ../upstream.git
+    git push -q origin main
+    FL_CLAUDE=true FL_MAX_ITERS=1 FL_ARCHIVE_DIR="$archive" \
+      FL_BASE_BRANCH=main FL_RETROSPECTIVE=0 \
+      "$FL" TKT slug
+  ) > /dev/null 2>&1
+  rc=$?
+
+  archive_ok=0
+  if [ -d "$archive/runs" ] &&
+    [ -f "$archive/INDEX.md" ] &&
+    ls "$archive/runs"/TKT-*/summary.json > /dev/null 2>&1 &&
+    ls "$archive/runs"/TKT-*/STATUS.md > /dev/null 2>&1; then
+    archive_ok=1
+  fi
+  rm -rf "$tmp"
+  [ "$rc" -eq 0 ]
+  [ "$archive_ok" -eq 1 ]
+}
