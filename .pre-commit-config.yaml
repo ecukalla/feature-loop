@@ -43,3 +43,12 @@ repos:
     rev: v8.30.1
     hooks:
       - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: lint-plugin-manifests
+        name: lint plugin manifests (semver + source paths)
+        entry: scripts/lint-plugin-manifests.sh
+        language: system
+        pass_filenames: false
+        files: ^\.claude-plugin/.*\.json$

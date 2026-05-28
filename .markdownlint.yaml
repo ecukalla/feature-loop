@@ -1,6 +1,10 @@
 default: true
 # Long lines are fine in prose/tables.
 MD013: false
+# Keep a Changelog reuses ### Added / ### Fixed / etc. across releases by
+# design; only flag heading duplicates that share the same parent.
+MD024:
+  siblings_only: true
 # Allow inline HTML (badges, details blocks).
 MD033: false
 # Files may start with front matter or badges, not a heading.
