@@ -30,7 +30,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      # Third-party action pinned to a full commit SHA (mutable tags can be
+      # repointed). Matches the SHA-pin style already used in this repo's
+      # workflows; trailing comment records the human-readable version.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - run: docker build -f .devcontainer/Dockerfile -t devcontainer-smoke .devcontainer
       # Smoke-test the toolchain: every tool the gate chain needs must be on PATH
       # and exit 0 in the built image. Catches build-ordering / missing-dep
