@@ -255,8 +255,6 @@ Open failures: ${open}
 
 _updated $(date '+%Y-%m-%d %H:%M:%S')_
 EOF
-  printf '\n=== %s | iter %s/%s | build:%s test:%s gates:%s sec:%s simp:%s ===\n' \
-    "$TICKET" "$ITER" "$FL_MAX_ITERS" "$ST_BUILD" "$ST_TEST" "$ST_PIPE" "$ST_SEC" "$ST_SIMP"
 }
 run_retrospective() {
   [ "$FL_RETROSPECTIVE" = "0" ] && return 0
@@ -434,6 +432,7 @@ run_gates() {
 GREEN=0
 for i in $(seq 1 "$FL_MAX_ITERS"); do
   ITER="$i"
+  hdr "${TICKET} — feature-loop (iteration ${ITER}/${FL_MAX_ITERS})"
   run_build
   run_gates
   if ! ls tasks/failures/*.md > /dev/null 2>&1; then
