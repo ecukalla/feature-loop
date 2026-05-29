@@ -153,6 +153,139 @@ ST_SEC="pending"
 ST_SIMP="pending"
 ITER=0
 
+# ---- terminal output: TTY-gated color + headers (spinner/panel added below) ----
+# Everything here collapses to a no-op off-TTY, so piped/headless output and
+# tasks/logs/* stay byte-for-byte plain (no \033, no \r). `[ -t 1 ]` is the gate:
+# feature-loop-docker only allocates a container TTY when attached, so this is
+# exactly the right signal (see docs/featureloop-config.md).
+#
+# Color (NO_COLOR) and animation (FL_NO_SPINNER) are independent opt-outs, so they
+# are derived separately from the raw TTY check rather than folded into one flag.
+if [ -t 1 ]; then FL_TTY=1; else FL_TTY=0; fi
+
+# SGR color — literal codes on a TTY unless NO_COLOR is set (https://no-color.org).
+C_BLUE="" C_GREEN="" C_RED="" C_BOLD="" C_RESET=""
+if [ "$FL_TTY" -eq 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  # shellcheck disable=SC2034  # C_GREEN is part of the palette, consumed by spin/_gate_panel below.
+  C_BLUE=$'\033[34m' C_GREEN=$'\033[32m' C_RED=$'\033[31m'
+  C_BOLD=$'\033[1m' C_RESET=$'\033[0m'
+fi
+# DECTCEM show-cursor (not color, so gated only on the TTY). Empty off-TTY.
+C_CURSOR_SHOW=""
+[ "$FL_TTY" -eq 1 ] && C_CURSOR_SHOW=$'\033[?25h'
+
+# A blue `==>` (colored, not bold) followed by a bold title — Homebrew's headline.
+hdr() { printf '%s==>%s %s%s%s\n' "$C_BLUE" "$C_RESET" "$C_BOLD" "$*" "$C_RESET"; }
+# Warnings/errors carry a labelled prefix and go to stderr.
+warn() { printf '%sWarning:%s %s\n' "$C_BOLD" "$C_RESET" "$*" >&2; }
+err() { printf '%sError:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; }
+
+# Animation (spinner + live gate panel) needs a TTY and the FL_NO_SPINNER opt-out
+# unset. NO_COLOR does not disable it — color and animation are independent opt-outs.
+FL_ANIMATE=1
+{ [ "$FL_TTY" -eq 0 ] || [ "${FL_NO_SPINNER:-0}" = 1 ]; } && FL_ANIMATE=0
+# DECTCEM hide-cursor — only meaningful while animating; empty otherwise.
+C_CURSOR_HIDE=""
+[ "$FL_ANIMATE" -eq 1 ] && C_CURSOR_HIDE=$'\033[?25l'
+
+# Status marks + spinner frames: single-cell ✓/✗ and Homebrew's exact braille frame
+# sequence by default. FL_ASCII=1 swaps in ASCII for ambiguous-width (e.g. CJK) terminals.
+MARK_OK="✓" MARK_FAIL="✗"
+FL_FRAMES=(⠋ ⠙ ⠚ ⠞ ⠖ ⠦ ⠴ ⠲ ⠳ ⠓)
+if [ "${FL_ASCII:-0}" = 1 ]; then
+  MARK_OK="[OK]" MARK_FAIL="[XX]"
+  FL_FRAMES=('|' '/' '-' '\\')
+fi
+
+# spin <msg> <log> -- <cmd...>
+# Run <cmd...> with its output redirected to <log>, resolving to a single ✓/✗ line.
+# Attached: animate the braille spinner next to <msg> at ~0.1s. Off-TTY (or under
+# FL_NO_SPINNER): print one ==> header and run inline — no escape codes reach the
+# log or stdout. spin's exit status is the command's.
+spin() {
+  local msg="$1" log="$2" rc=0
+  shift 2
+  [ "${1:-}" = "--" ] && shift
+  if [ "$FL_ANIMATE" -eq 0 ]; then
+    hdr "$msg"
+    "$@" > "$log" 2>&1 || rc=$?
+    return "$rc"
+  fi
+  "$@" > "$log" 2>&1 &
+  local pid=$! i=0
+  printf '%s' "$C_CURSOR_HIDE"
+  while kill -0 "$pid" 2> /dev/null; do
+    printf '\r  %s%s%s %s' "$C_BLUE" "${FL_FRAMES[i % ${#FL_FRAMES[@]}]}" "$C_RESET" "$msg"
+    i=$((i + 1))
+    sleep 0.1
+  done
+  wait "$pid" || rc=$?
+  printf '\r\033[K' # carriage return + erase-in-line, then the resolved mark
+  local color="$C_GREEN" mark="$MARK_OK"
+  [ "$rc" -eq 0 ] || { color="$C_RED" mark="$MARK_FAIL"; }
+  printf '  %s%s%s %s\n' "$color" "$mark" "$C_RESET" "$msg"
+  printf '%s' "$C_CURSOR_SHOW"
+  return "$rc"
+}
+
+# Gate keys map to their failure file (presence of the file = that gate failed)
+# and to a one-line screen result mirroring the STATUS.md wording.
+_gate_failfile() {
+  case "$1" in
+    test) printf 'tasks/failures/test.md' ;;
+    project) printf 'tasks/failures/pipeline.md' ;;
+    security) printf 'tasks/failures/security.md' ;;
+  esac
+}
+_gate_result() {
+  local ff
+  ff="$(_gate_failfile "$1")"
+  if [ -f "$ff" ]; then printf 'FAIL → %s' "${ff#tasks/}"; else printf 'pass'; fi
+}
+
+# Redraw the three gate lines once: a spinner frame + "running" while the PID is
+# alive, or the resolved ✓/✗ verdict once it has exited. Each line erases to EOL.
+# Args: <frame> <pid-test> <pid-project> <pid-security>.
+_gate_draw() {
+  local frame="$1"
+  local pids=("$2" "$3" "$4")
+  local names=(test project security)
+  local k name ff
+  for k in 0 1 2; do
+    name="${names[k]}"
+    if kill -0 "${pids[k]}" 2> /dev/null; then
+      printf '  %s%s%s %-8s running\033[K\n' "$C_BLUE" "$frame" "$C_RESET" "$name"
+    else
+      ff="$(_gate_failfile "$name")"
+      if [ -f "$ff" ]; then
+        printf '  %s%s%s %-8s FAIL → %s\033[K\n' "$C_RED" "$MARK_FAIL" "$C_RESET" "$name" "${ff#tasks/}"
+      else
+        printf '  %s%s%s %-8s pass\033[K\n' "$C_GREEN" "$MARK_OK" "$C_RESET" "$name"
+      fi
+    fi
+  done
+}
+
+# Live in-place display for the three concurrent gates (TTY only). Redraws the three
+# lines via CUU/EL at ~0.1s until every PID exits; the final verdict persists. Never
+# called when FL_ANIMATE=0 — run_gates prints plain result lines there instead.
+_gate_panel() {
+  local p_test="$1" p_pipe="$2" p_sec="$3" i=0
+  printf '  %sGates%s\n' "$C_BOLD" "$C_RESET"
+  printf '%s' "$C_CURSOR_HIDE"
+  _gate_draw "${FL_FRAMES[0]}" "$p_test" "$p_pipe" "$p_sec"
+  while kill -0 "$p_test" 2> /dev/null || kill -0 "$p_pipe" 2> /dev/null || kill -0 "$p_sec" 2> /dev/null; do
+    sleep 0.1
+    i=$(((i + 1) % ${#FL_FRAMES[@]}))
+    printf '\033[3A' # cursor-up 3, back to the first gate line
+    _gate_draw "${FL_FRAMES[i]}" "$p_test" "$p_pipe" "$p_sec"
+  done
+  printf '\033[3A' # final redraw, now that all three have resolved
+  _gate_draw "${FL_FRAMES[i]}" "$p_test" "$p_pipe" "$p_sec"
+  printf '%s' "$C_CURSOR_SHOW"
+  wait "$p_test" "$p_pipe" "$p_sec" 2> /dev/null || true
+}
+
 render_status() {
   local open="none" f
   if ls tasks/failures/*.md > /dev/null 2>&1; then
@@ -178,8 +311,6 @@ Open failures: ${open}
 
 _updated $(date '+%Y-%m-%d %H:%M:%S')_
 EOF
-  printf '\n=== %s | iter %s/%s | build:%s test:%s gates:%s sec:%s simp:%s ===\n' \
-    "$TICKET" "$ITER" "$FL_MAX_ITERS" "$ST_BUILD" "$ST_TEST" "$ST_PIPE" "$ST_SEC" "$ST_SIMP"
 }
 run_retrospective() {
   [ "$FL_RETROSPECTIVE" = "0" ] && return 0
@@ -253,11 +384,19 @@ EOF
 }
 
 on_exit() {
+  # Restore the cursor in case an interrupted spinner left it hidden. Empty
+  # off-TTY, so this is a no-op for piped/headless runs. Fires on EXIT and (via
+  # the trap below) on INT/TERM.
+  printf '%s' "$C_CURSOR_SHOW"
   render_status 2> /dev/null || true
   run_retrospective || true
   archive_run "${OUTCOME:-unknown}" || true
 }
 trap on_exit EXIT
+# Route INT/TERM through a normal exit so the EXIT trap restores the cursor and
+# archives the run before the interrupted process dies.
+trap 'exit 130' INT
+trap 'exit 143' TERM
 ST_WT="ready"
 render_status
 
@@ -268,7 +407,8 @@ run_build() {
   if ls tasks/failures/*.md > /dev/null 2>&1; then
     note=" The previous iteration's gates failed — read EVERY file in tasks/failures/ and fix the root cause of each."
   fi
-  "$FL_CLAUDE" "${FLAGS[@]}" -p "${FL_BUILD_PROMPT}${note}" > "tasks/logs/build-${ITER}.log" 2>&1 || true
+  spin "Build (writer) — iteration ${ITER}" "tasks/logs/build-${ITER}.log" -- \
+    "$FL_CLAUDE" "${FLAGS[@]}" -p "${FL_BUILD_PROMPT}${note}" || true
   rm -f tasks/failures/*.md
   ST_BUILD="done (it.${ITER})"
   render_status
@@ -339,7 +479,15 @@ run_gates() {
   P2=$!
   gate_security &
   P3=$!
-  wait "$P1" "$P2" "$P3" || true
+  if [ "$FL_ANIMATE" -eq 1 ]; then
+    _gate_panel "$P1" "$P2" "$P3"
+  else
+    hdr "Gates — test · project · security"
+    wait "$P1" "$P2" "$P3" || true
+    printf '    %-8s %s\n' test "$(_gate_result test)"
+    printf '    %-8s %s\n' project "$(_gate_result project)"
+    printf '    %-8s %s\n' security "$(_gate_result security)"
+  fi
   [ -f tasks/failures/test.md ] && ST_TEST="FAIL -> failures/test.md" || ST_TEST="pass"
   [ -f tasks/failures/pipeline.md ] && ST_PIPE="FAIL -> failures/pipeline.md" || ST_PIPE="pass"
   [ -f tasks/failures/security.md ] && ST_SEC="FAIL -> failures/security.md" || ST_SEC="pass"
@@ -349,6 +497,7 @@ run_gates() {
 GREEN=0
 for i in $(seq 1 "$FL_MAX_ITERS"); do
   ITER="$i"
+  hdr "${TICKET} — feature-loop (iteration ${ITER}/${FL_MAX_ITERS})"
   run_build
   run_gates
   if ! ls tasks/failures/*.md > /dev/null 2>&1; then
@@ -360,24 +509,27 @@ done
 if [ "$GREEN" -ne 1 ]; then
   ST_SIMP="skipped (not green after ${FL_MAX_ITERS} iters)"
   render_status
-  echo "STOP: gates still failing after ${FL_MAX_ITERS} iterations. See tasks/failures/ and tasks/logs/." >&2
+  err "gates still failing after ${FL_MAX_ITERS} iterations. See tasks/failures/ and tasks/logs/."
   OUTCOME="not-green"
   exit 1
 fi
 
 ST_SIMP="running"
 render_status
-"$FL_CLAUDE" "${FLAGS[@]}" -p "$FL_SIMPLIFY_PROMPT" > "tasks/logs/simplify.log" 2>&1 || true
+spin "Code simplify" "tasks/logs/simplify.log" -- \
+  "$FL_CLAUDE" "${FLAGS[@]}" -p "$FL_SIMPLIFY_PROMPT" || true
 
 if gates_in_clean_tree tasks/logs/gates-final.log; then
   ST_SIMP="done"
   render_status
-  echo "DONE: ${BRANCH} is green. Review tasks/STATUS.md, then push and open the PR when ready."
+  # Final summary in a green header (the one place a non-blue header is used).
+  printf '%s==>%s %s%s%s\n' "$C_GREEN" "$C_RESET" "$C_BOLD" \
+    "DONE: ${BRANCH} is green. Review tasks/STATUS.md, then push and open the PR when ready." "$C_RESET"
   OUTCOME="green"
 else
   ST_SIMP="broke gates -> tasks/logs/gates-final.log"
   render_status
-  echo "WARN: /code-simplify broke the gates. See tasks/logs/gates-final.log" >&2
+  warn "code-simplify broke the gates. See tasks/logs/gates-final.log"
   OUTCOME="broke-simplify"
   exit 1
 fi

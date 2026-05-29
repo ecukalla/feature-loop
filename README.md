@@ -98,6 +98,11 @@ Projects needing extra toolchain point `FL_DOCKERFILE` (or `FL_IMAGE`) at a **pu
 toolchain** image — install tools to `/usr/local` so the non-root runtime user can use
 them. feature-loop adds Claude/plugin/engine on top automatically.
 
+On an interactive terminal the engine shows colored `==>` headers, a spinner, and a
+live in-place display of the parallel gates; piped/headless runs stay plain (zero
+escape codes). Set `NO_COLOR` to drop color or `FL_NO_SPINNER=1` to drop the animation
+(see [`docs/featureloop-config.md`](docs/featureloop-config.md)).
+
 ## Layout
 
 | Path | Role |
