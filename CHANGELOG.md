@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-05-29
+
 ### Added
 
 - Live terminal status for `bin/feature-loop` runs: colored `==>` section headers per
