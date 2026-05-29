@@ -45,7 +45,9 @@ usage:
   normal usage limits. **After 15 June 2026 they draw from the separate monthly Agent SDK
   credit above, then bill at full API rates** once it is exhausted. feature-loop loops
   build → gates → fix (several `claude -p` calls per iteration, up to `FL_MAX_ITERS`), so
-  a handful of large runs can consume a month's credit.
+  a handful of large runs can consume a month's credit. `feature-loop-docker` prints a
+  one-line reminder to stderr on each `--auth oauth` run; set `FL_NO_BILLING_NOTICE=1` to
+  silence it.
 - **`ANTHROPIC_API_KEY` (API key).** Unchanged — these runs were always billed at API
   rates and never drew from a subscription.
 

@@ -37,6 +37,7 @@ die() {
   echo "ERROR: $*" >&2
   exit 2
 }
+warn() { echo "WARNING: $*" >&2; }
 validate_ident() { [[ "$2" =~ $IDENT_RE ]] || die "$1 must match $IDENT_RE"; }
 validate_image() { [[ "$2" =~ $OCI_RE ]] || die "invalid $1: $2"; }
 validate_relpath() {
@@ -58,6 +59,9 @@ Auth:
   --auth oauth   use your Claude.ai / Max subscription. Mounts the credentials
                  Claude Code already stores on the host (or extracts them from
                  the macOS Keychain entry 'Claude Code-credentials' on the fly).
+                 Billing changed 2026-06-15 — these headless runs bill separately
+                 from your plan; see docs/billing-and-auth.md. Set
+                 FL_NO_BILLING_NOTICE=1 to silence the per-run reminder.
 
 Options:
   --image REF    base image to overlay (overrides .featureloop)
@@ -170,6 +174,11 @@ case "$AUTH" in
       fi
     fi
     DOCKER_AUTH_ARGS+=(-v "$FL_OAUTH_CREDS:/home/fluser/.claude/.credentials.json:rw")
+    # Billing notice: every feature-loop phase runs as headless `claude -p`, which
+    # Anthropic meters as programmatic usage. As of 2026-06-15 that no longer draws
+    # from the Pro/Max plan's normal limits — see docs/billing-and-auth.md.
+    [ -n "${FL_NO_BILLING_NOTICE:-}" ] || warn \
+      "--auth oauth: as of 2026-06-15 these headless runs bill from your plan's separate monthly Agent SDK credit, then full API rates once spent (interactive Claude Code is unaffected). See docs/billing-and-auth.md — silence with FL_NO_BILLING_NOTICE=1."
     ;;
   *)
     die "invalid --auth: '$AUTH' (use 'key' or 'oauth')"
