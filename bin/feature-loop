@@ -481,7 +481,15 @@ run_gates() {
   P2=$!
   gate_security &
   P3=$!
-  wait "$P1" "$P2" "$P3" || true
+  if [ "$FL_ANIMATE" -eq 1 ]; then
+    _gate_panel "$P1" "$P2" "$P3"
+  else
+    hdr "Gates — test · project · security"
+    wait "$P1" "$P2" "$P3" || true
+    printf '    %-8s %s\n' test "$(_gate_result test)"
+    printf '    %-8s %s\n' project "$(_gate_result project)"
+    printf '    %-8s %s\n' security "$(_gate_result security)"
+  fi
   [ -f tasks/failures/test.md ] && ST_TEST="FAIL -> failures/test.md" || ST_TEST="pass"
   [ -f tasks/failures/pipeline.md ] && ST_PIPE="FAIL -> failures/pipeline.md" || ST_PIPE="pass"
   [ -f tasks/failures/security.md ] && ST_SEC="FAIL -> failures/security.md" || ST_SEC="pass"
