@@ -373,3 +373,42 @@ EOF
   grep -q 'test-driven-development skill' "$FL"
   grep -q 'code-simplification skill' "$FL"
 }
+
+# --- regression: gates run against a clean checkout, not the bind-mount (#23) ---
+
+@test "gate phase ignores spurious worktree +x bits by gating a clean checkout" {
+  # macOS Docker bind mounts report a spurious +x on every file, which fails
+  # pre-commit's check-executables-have-shebangs even though git records them 100644.
+  # The gate phase must run FL_GATES against a git-materialized checkout (recorded
+  # modes), not in place. Proxy gate `test ! -x plain.txt` fails in the +x worktree
+  # but passes on the clean checkout.
+  tmp="$(mktemp -d)"
+  (
+    cd "$tmp" || exit 1
+    git init --bare -q upstream.git
+    git init -q -b main seed
+    cd seed || exit 1
+    printf 'no shebang here\n' > plain.txt
+    mkdir tasks && echo todo > tasks/plan.md
+    git add plain.txt
+    git -c user.email=t@t -c user.name=t commit -qm init
+    git remote add origin ../upstream.git
+    git push -q origin main
+  ) > /dev/null 2>&1
+
+  wt="$tmp/wt"
+  git -C "$tmp/seed" worktree add -q "$wt" origin/main > /dev/null 2>&1
+  chmod +x "$wt/plain.txt" # simulate the bind mount's spurious +x on a tracked 100644 file
+
+  (
+    cd "$tmp/seed" || exit 1
+    printf "FL_GATES='test ! -x plain.txt'\n" > .featureloop
+    FL_CLAUDE=true FL_MAX_ITERS=1 FL_BASE_BRANCH=main FL_RETROSPECTIVE=0 \
+      FL_ARCHIVE_DIR="$tmp/archive" FL_WT_DIR="$wt" \
+      "$FL" TKT slug
+  ) > /dev/null 2>&1
+  rc=$?
+
+  rm -rf "$tmp"
+  [ "$rc" -eq 0 ]
+}

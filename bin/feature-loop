@@ -277,9 +277,44 @@ run_build() {
 gate_test() { "$FL_CLAUDE" "${FLAGS[@]}" -p "$FL_TEST_PROMPT" > "tasks/logs/test-${ITER}.log" 2>&1 || true; }
 gate_security() { "$FL_CLAUDE" "${FLAGS[@]}" -p "$FL_SECURITY_PROMPT" > "tasks/logs/security-${ITER}.log" 2>&1 || true; }
 
+# Materialize the worktree (committed + tracked uncommitted changes) into a clean
+# checkout that carries git's recorded file modes. On macOS, Docker Desktop's bind
+# mount reports spurious +x bits that fail check-executables-have-shebangs; cloning
+# onto the container's own filesystem restores the modes git actually tracks.
+# core.fileMode=false keeps those bogus bits out of the diff we replay on top.
+fl_materialize() {
+  local dest="$1" patch
+  git clone -q --no-hardlinks "$PWD" "$dest" || return 1
+  patch="$(mktemp)"
+  if git -c core.fileMode=false diff HEAD --binary > "$patch" && [ -s "$patch" ]; then
+    git -C "$dest" apply --whitespace=nowarn "$patch" || {
+      rm -f "$patch"
+      return 1
+    }
+  fi
+  rm -f "$patch"
+}
+
+# Run FL_GATES against a clean materialized checkout (correct modes), logging to $1.
+# Returns the gate exit status; falls back to an in-place run if materialization fails.
+gates_in_clean_tree() {
+  local log="$1" rc=0 scratch
+  scratch="$(mktemp -d)"
+  if fl_materialize "$scratch/tree"; then
+    (cd "$scratch/tree" && eval "$FL_GATES") > "$log" 2>&1 || rc=$?
+  else
+    {
+      echo "WARN: clean-tree materialization failed; gating in place."
+      eval "$FL_GATES"
+    } > "$log" 2>&1 || rc=$?
+  fi
+  rm -rf "$scratch"
+  return "$rc"
+}
+
 gate_pipeline() {
   local log="tasks/logs/gates-${ITER}.log" rc=0
-  (eval "$FL_GATES") > "$log" 2>&1 || rc=$?
+  gates_in_clean_tree "$log" || rc=$?
   if [ "$rc" -ne 0 ]; then
     {
       echo "# Project gates failed (exit ${rc})"
@@ -334,7 +369,7 @@ ST_SIMP="running"
 render_status
 "$FL_CLAUDE" "${FLAGS[@]}" -p "$FL_SIMPLIFY_PROMPT" > "tasks/logs/simplify.log" 2>&1 || true
 
-if (eval "$FL_GATES") > tasks/logs/gates-final.log 2>&1; then
+if gates_in_clean_tree tasks/logs/gates-final.log; then
   ST_SIMP="done"
   render_status
   echo "DONE: ${BRANCH} is green. Review tasks/STATUS.md, then push and open the PR when ready."

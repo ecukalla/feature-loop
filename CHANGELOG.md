@@ -15,6 +15,13 @@ All notable changes to this project are documented here. The format follows
   plugin container, so the writer ran as `Unknown command`, made no edits, and the
   loop could never converge or commit. The `security` phase already used the working
   skill-by-name form. Closes #19.
+- The autonomous gate phase now runs `FL_GATES` against a clean, git-materialized
+  checkout instead of in place on the worktree. On macOS, Docker Desktop's bind mount
+  reports spurious executable bits, so `check-executables-have-shebangs` failed ~20
+  tracked-but-non-executable files (`README.md`, `Makefile`, …) and a local run never
+  went green even though CI (clean Linux checkout) passed. The materialized tree carries
+  git's recorded modes and replays uncommitted changes (e.g. the simplify phase's) on
+  top. Closes #23.
 
 ## [0.1.3] — 2026-05-28
 
