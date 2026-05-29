@@ -18,6 +18,19 @@ FROM golang:1.25-bookworm
 ENV NODE_VERSION=22.20.0 \
     DEBIAN_FRONTEND=noninteractive
 
+# System toolchain: pre-commit (gate driver), bats (test runner), jq (manifest-lint
+# helper), and xz-utils — needed to unpack the Node `.tar.xz` below and NOT present in
+# the golang base, so it must be installed before the Node step. pre-commit is installed
+# via pipx into /usr/local/bin so it is on the non-root user's PATH. Pinned to a known
+# version so the gate toolchain is reproducible (same pin discipline as the Go base,
+# Node, and every pre-commit hook rev).
+ENV PRE_COMMIT_VERSION=4.6.0
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends xz-utils bats jq pipx \
+  && rm -rf /var/lib/apt/lists/* \
+  && PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install "pre-commit==${PRE_COMMIT_VERSION}" \
+  && chmod -R a+rX /opt/pipx
+
 # Node, pinned to match the overlay (docker/overlay-bootstrap.sh), unpacked into /usr/local.
 # The expected SHA-256 is pinned literally here (per arch, from the release's SHASUMS256.txt)
 # rather than fetched at build time: a fetched checksum shares the tarball's origin, so an
@@ -32,14 +45,3 @@ RUN arch="$(dpkg --print-architecture)" \
   && printf '%s  /tmp/node.tar.xz\n' "$sha" | sha256sum -c - \
   && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
   && rm -f /tmp/node.tar.xz
-
-# pre-commit (gate driver), bats (test runner), jq (manifest-lint helper). pre-commit
-# is installed via pipx into /usr/local/bin so it is on the non-root user's PATH. Pinned
-# to a known version so the gate toolchain is reproducible (same pin discipline as the Go
-# base, Node, and every pre-commit hook rev).
-ENV PRE_COMMIT_VERSION=4.6.0
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends bats jq pipx \
-  && rm -rf /var/lib/apt/lists/* \
-  && PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install "pre-commit==${PRE_COMMIT_VERSION}" \
-  && chmod -R a+rX /opt/pipx
