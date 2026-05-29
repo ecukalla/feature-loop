@@ -24,7 +24,7 @@
 #                  on the fly.
 set -euo pipefail
 
-readonly FL_VERSION="0.2.0"
+readonly FL_VERSION="0.3.0"
 # Conservative identifier — TICKET/SLUG end up in branch names, paths, image tags.
 readonly IDENT_RE='^[A-Za-z0-9._-]{1,64}$'
 # OCI image reference: [registry[:port]/]name[:tag][@sha256:digest]
