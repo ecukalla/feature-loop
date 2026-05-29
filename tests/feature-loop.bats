@@ -363,6 +363,22 @@ EOF
   [[ "$output" == *"does not resolve"* ]]
 }
 
+# --- regression: marketplace name must differ from the plugin name (ISSUE-11) --------
+
+@test "marketplace name differs from the plugin name" {
+  # `feature-loop@feature-loop` reads as a typo: the marketplace (the registry) and
+  # the plugin it contains shared the name `feature-loop`. The marketplace is now
+  # `ecukalla-plugins` so the install command (`feature-loop@ecukalla-plugins`) is
+  # self-explanatory and leaves room for sibling plugins. Guard the duplication from
+  # silently returning.
+  market_name="$(jq -r '.name' "$REPO_ROOT/.claude-plugin/marketplace.json")"
+  plugin_name="$(jq -r '.name' "$REPO_ROOT/.claude-plugin/plugin.json")"
+  if [ "$market_name" = "$plugin_name" ]; then
+    echo "marketplace.json:.name ('$market_name') must differ from plugin.json:.name ('$plugin_name') — the duplication makes the install command read as 'feature-loop@feature-loop'" >&2
+    return 1
+  fi
+}
+
 # --- regression: headless engine prompts must use skills, not slash-commands (#19) ---
 
 @test "engine default prompts invoke agent-skills skills, not slash-commands" {

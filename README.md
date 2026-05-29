@@ -40,8 +40,22 @@ is what makes the parallelism safe.
 
 ```bash
 claude plugin marketplace add ecukalla/feature-loop
-claude plugin install feature-loop@feature-loop
+claude plugin install feature-loop@ecukalla-plugins
 # then, in any repo: /auto-feature PROJ-123 add-rollup-metric
+```
+
+### Migrating from 0.1.x
+
+The marketplace was renamed from `feature-loop` to `ecukalla-plugins` in 0.2.0, so
+the install grammar moved from `feature-loop@feature-loop` to
+`feature-loop@ecukalla-plugins`. An existing 0.1.x install keeps working, but to pick
+up the new marketplace name, remove the old one and re-add it:
+
+```bash
+claude plugin uninstall feature-loop
+claude plugin marketplace remove feature-loop
+claude plugin marketplace add ecukalla/feature-loop
+claude plugin install feature-loop@ecukalla-plugins
 ```
 
 **Headless / CLI:**
