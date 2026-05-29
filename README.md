@@ -71,6 +71,12 @@ ANTHROPIC_API_KEY=… feature-loop-docker --image python:3.14-slim PROJ-123 add-
 feature-loop-docker --auth oauth PROJ-123 add-rollup-metric
 ```
 
+> **Billing — changes 2026-06-15.** feature-loop runs entirely on headless `claude -p`,
+> which Anthropic counts as *programmatic* usage. From 2026-06-15, `--auth oauth` runs
+> draw from your plan's **separate monthly Agent SDK credit** and then bill at **full API
+> rates** (the `ANTHROPIC_API_KEY` path is unchanged). See
+> [`docs/billing-and-auth.md`](docs/billing-and-auth.md).
+
 **Bring your own Docker.** You name the base (an image, a Dockerfile, or `--image`);
 feature-loop wraps it with a cached overlay that injects only the Claude CLI, the
 agent-skills plugin, and the engine. There is no dependency on any image I publish —

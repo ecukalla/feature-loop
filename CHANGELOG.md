@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `docs/billing-and-auth.md` documents how feature-loop runs are billed and flags
+  Anthropic's **2026-06-15** change: *programmatic* Claude usage — the Agent SDK and
+  `claude -p`, which is every feature-loop phase — moves off Pro/Max subscription limits
+  onto a separate monthly credit billed at full API rates once spent. This affects the
+  `--auth oauth` path; the `ANTHROPIC_API_KEY` path is unchanged. The README `--auth
+  oauth` example now links the doc. (#36)
+- `feature-loop-docker --auth oauth` now prints a one-line billing reminder to stderr
+  about that change; silence it with `FL_NO_BILLING_NOTICE=1`. (#36)
+
 ## [0.2.0] — 2026-05-29
 
 ### Changed
