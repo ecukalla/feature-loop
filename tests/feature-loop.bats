@@ -93,7 +93,9 @@ setup() {
 }
 
 @test "feature-loop-docker rejects FL_DOCKERFILE containing .." {
-  FL_DOCKERFILE='../evil' run "$FLD" valid valid
+  # --no-config so the assertion targets the env-supplied value and isn't overridden
+  # by this repo's own root .featureloop (which sets FL_DOCKERFILE).
+  FL_DOCKERFILE='../evil' run "$FLD" --no-config valid valid
   [ "$status" -eq 2 ]
   [[ "$output" == *".."* ]]
 }
