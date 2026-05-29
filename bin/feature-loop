@@ -351,7 +351,8 @@ run_build() {
   if ls tasks/failures/*.md > /dev/null 2>&1; then
     note=" The previous iteration's gates failed — read EVERY file in tasks/failures/ and fix the root cause of each."
   fi
-  "$FL_CLAUDE" "${FLAGS[@]}" -p "${FL_BUILD_PROMPT}${note}" > "tasks/logs/build-${ITER}.log" 2>&1 || true
+  spin "Build (writer) — iteration ${ITER}" "tasks/logs/build-${ITER}.log" -- \
+    "$FL_CLAUDE" "${FLAGS[@]}" -p "${FL_BUILD_PROMPT}${note}" || true
   rm -f tasks/failures/*.md
   ST_BUILD="done (it.${ITER})"
   render_status
@@ -444,24 +445,27 @@ done
 if [ "$GREEN" -ne 1 ]; then
   ST_SIMP="skipped (not green after ${FL_MAX_ITERS} iters)"
   render_status
-  echo "STOP: gates still failing after ${FL_MAX_ITERS} iterations. See tasks/failures/ and tasks/logs/." >&2
+  err "gates still failing after ${FL_MAX_ITERS} iterations. See tasks/failures/ and tasks/logs/."
   OUTCOME="not-green"
   exit 1
 fi
 
 ST_SIMP="running"
 render_status
-"$FL_CLAUDE" "${FLAGS[@]}" -p "$FL_SIMPLIFY_PROMPT" > "tasks/logs/simplify.log" 2>&1 || true
+spin "Code simplify" "tasks/logs/simplify.log" -- \
+  "$FL_CLAUDE" "${FLAGS[@]}" -p "$FL_SIMPLIFY_PROMPT" || true
 
 if gates_in_clean_tree tasks/logs/gates-final.log; then
   ST_SIMP="done"
   render_status
-  echo "DONE: ${BRANCH} is green. Review tasks/STATUS.md, then push and open the PR when ready."
+  # Final summary in a green header (the one place a non-blue header is used).
+  printf '%s==>%s %s%s%s\n' "$C_GREEN" "$C_RESET" "$C_BOLD" \
+    "DONE: ${BRANCH} is green. Review tasks/STATUS.md, then push and open the PR when ready." "$C_RESET"
   OUTCOME="green"
 else
   ST_SIMP="broke gates -> tasks/logs/gates-final.log"
   render_status
-  echo "WARN: /code-simplify broke the gates. See tasks/logs/gates-final.log" >&2
+  warn "code-simplify broke the gates. See tasks/logs/gates-final.log"
   OUTCOME="broke-simplify"
   exit 1
 fi
