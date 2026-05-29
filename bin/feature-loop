@@ -153,6 +153,33 @@ ST_SEC="pending"
 ST_SIMP="pending"
 ITER=0
 
+# ---- terminal output: TTY-gated color + headers (spinner/panel added below) ----
+# Everything here collapses to a no-op off-TTY, so piped/headless output and
+# tasks/logs/* stay byte-for-byte plain (no \033, no \r). `[ -t 1 ]` is the gate:
+# feature-loop-docker only allocates a container TTY when attached, so this is
+# exactly the right signal (see docs/featureloop-config.md).
+#
+# Color (NO_COLOR) and animation (FL_NO_SPINNER) are independent opt-outs, so they
+# are derived separately from the raw TTY check rather than folded into one flag.
+if [ -t 1 ]; then FL_TTY=1; else FL_TTY=0; fi
+
+# SGR color — literal codes on a TTY unless NO_COLOR is set (https://no-color.org).
+C_BLUE="" C_GREEN="" C_RED="" C_BOLD="" C_RESET=""
+if [ "$FL_TTY" -eq 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  # shellcheck disable=SC2034  # C_GREEN is part of the palette, consumed by spin/_gate_panel below.
+  C_BLUE=$'\033[34m' C_GREEN=$'\033[32m' C_RED=$'\033[31m'
+  C_BOLD=$'\033[1m' C_RESET=$'\033[0m'
+fi
+# DECTCEM show-cursor (not color, so gated only on the TTY). Empty off-TTY.
+C_CURSOR_SHOW=""
+[ "$FL_TTY" -eq 1 ] && C_CURSOR_SHOW=$'\033[?25h'
+
+# A blue `==>` (colored, not bold) followed by a bold title — Homebrew's headline.
+hdr() { printf '%s==>%s %s%s%s\n' "$C_BLUE" "$C_RESET" "$C_BOLD" "$*" "$C_RESET"; }
+# Warnings/errors carry a labelled prefix and go to stderr.
+warn() { printf '%sWarning:%s %s\n' "$C_BOLD" "$C_RESET" "$*" >&2; }
+err() { printf '%sError:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; }
+
 render_status() {
   local open="none" f
   if ls tasks/failures/*.md > /dev/null 2>&1; then
@@ -253,11 +280,19 @@ EOF
 }
 
 on_exit() {
+  # Restore the cursor in case an interrupted spinner left it hidden. Empty
+  # off-TTY, so this is a no-op for piped/headless runs. Fires on EXIT and (via
+  # the trap below) on INT/TERM.
+  printf '%s' "$C_CURSOR_SHOW"
   render_status 2> /dev/null || true
   run_retrospective || true
   archive_run "${OUTCOME:-unknown}" || true
 }
 trap on_exit EXIT
+# Route INT/TERM through a normal exit so the EXIT trap restores the cursor and
+# archives the run before the interrupted process dies.
+trap 'exit 130' INT
+trap 'exit 143' TERM
 ST_WT="ready"
 render_status
 
