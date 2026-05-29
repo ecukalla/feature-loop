@@ -1,0 +1,17 @@
+# .featureloop — THIS repo's own feature-loop config, NOT a template.
+#
+# feature-loop is generic: it prescribes no toolchain. Users bring their own base
+# and gates — start from examples/.featureloop, not this file. This file exists only
+# so /auto-feature can dogfood feature-loop on feature-loop itself with a durable,
+# committed config (untracked files die with `git worktree remove` each run).
+
+FL_BASE_BRANCH=main
+FL_RETROSPECTIVE=0
+
+# Build this repo's gate toolchain (golang + Node + pre-commit + bats + jq) as the base.
+# Set explicitly: the engine defaults FL_DOCKERFILE to empty (→ a neutral public base),
+# regardless of what the docs table lists as the default.
+FL_DOCKERFILE=.devcontainer/Dockerfile
+
+# Authoritative gate — the local mirror of CI. First failing command stops the chain.
+FL_GATES='pre-commit run --all-files && bats --print-output-on-failure tests/'
