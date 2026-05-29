@@ -230,6 +230,64 @@ spin() {
   return "$rc"
 }
 
+# Gate keys map to their failure file (presence of the file = that gate failed)
+# and to a one-line screen result mirroring the STATUS.md wording.
+_gate_failfile() {
+  case "$1" in
+    test) printf 'tasks/failures/test.md' ;;
+    project) printf 'tasks/failures/pipeline.md' ;;
+    security) printf 'tasks/failures/security.md' ;;
+  esac
+}
+_gate_result() {
+  local ff
+  ff="$(_gate_failfile "$1")"
+  if [ -f "$ff" ]; then printf 'FAIL → %s' "${ff#tasks/}"; else printf 'pass'; fi
+}
+
+# Redraw the three gate lines once: a spinner frame + "running" while the PID is
+# alive, or the resolved ✓/✗ verdict once it has exited. Each line erases to EOL.
+# Args: <frame> <pid-test> <pid-project> <pid-security>.
+_gate_draw() {
+  local frame="$1"
+  local pids=("$2" "$3" "$4")
+  local names=(test project security)
+  local k name ff
+  for k in 0 1 2; do
+    name="${names[k]}"
+    if kill -0 "${pids[k]}" 2> /dev/null; then
+      printf '  %s%s%s %-8s running\033[K\n' "$C_BLUE" "$frame" "$C_RESET" "$name"
+    else
+      ff="$(_gate_failfile "$name")"
+      if [ -f "$ff" ]; then
+        printf '  %s%s%s %-8s FAIL → %s\033[K\n' "$C_RED" "$MARK_FAIL" "$C_RESET" "$name" "${ff#tasks/}"
+      else
+        printf '  %s%s%s %-8s pass\033[K\n' "$C_GREEN" "$MARK_OK" "$C_RESET" "$name"
+      fi
+    fi
+  done
+}
+
+# Live in-place display for the three concurrent gates (TTY only). Redraws the three
+# lines via CUU/EL at ~0.1s until every PID exits; the final verdict persists. Never
+# called when FL_ANIMATE=0 — run_gates prints plain result lines there instead.
+_gate_panel() {
+  local p_test="$1" p_pipe="$2" p_sec="$3" i=0
+  printf '  %sGates%s\n' "$C_BOLD" "$C_RESET"
+  printf '%s' "$C_CURSOR_HIDE"
+  _gate_draw "${FL_FRAMES[0]}" "$p_test" "$p_pipe" "$p_sec"
+  while kill -0 "$p_test" 2> /dev/null || kill -0 "$p_pipe" 2> /dev/null || kill -0 "$p_sec" 2> /dev/null; do
+    sleep 0.1
+    i=$(((i + 1) % ${#FL_FRAMES[@]}))
+    printf '\033[3A' # cursor-up 3, back to the first gate line
+    _gate_draw "${FL_FRAMES[i]}" "$p_test" "$p_pipe" "$p_sec"
+  done
+  printf '\033[3A' # final redraw, now that all three have resolved
+  _gate_draw "${FL_FRAMES[i]}" "$p_test" "$p_pipe" "$p_sec"
+  printf '%s' "$C_CURSOR_SHOW"
+  wait "$p_test" "$p_pipe" "$p_sec" 2> /dev/null || true
+}
+
 render_status() {
   local open="none" f
   if ls tasks/failures/*.md > /dev/null 2>&1; then
