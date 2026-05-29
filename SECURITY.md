@@ -30,7 +30,11 @@ blast radius — never run the engine that way directly on a host you care about
 - **The agent-skills plugin** at the pinned `AGENT_SKILLS_REF` commit. Bumping that
   arg is a deliberate decision; consider reviewing the diff first.
 - **The Claude CLI** at the version installed by `npm install -g @anthropic-ai/claude-code`
-  inside the overlay.
+  inside the overlay. In **CI**, the CLI is instead pinned via a tracked lockfile:
+  the `validate-plugin` job installs from `tools/package.json` (`npm --prefix tools ci`)
+  rather than pulling `latest` on every run, so a compromised release can't execute
+  against PR builds unnoticed. `tools/package.json` is the source of truth for that pin
+  and dependabot bumps it weekly.
 
 ### What the loop will do to your repo
 
