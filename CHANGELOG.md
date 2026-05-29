@@ -6,6 +6,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The plugin marketplace was renamed from `feature-loop` to `ecukalla-plugins` to
+  disambiguate it from the plugin it contains, which is also named `feature-loop`.
+  The old `feature-loop@feature-loop` install command read as a typo; it is now the
+  self-explanatory `feature-loop@ecukalla-plugins`, and the owner-prefixed name leaves
+  room for sibling plugins later. The plugin name is unchanged. A bats regression
+  guards the duplication from returning. Existing 0.1.x installs keep working; to pick
+  up the new name, re-add the marketplace:
+
+  ```bash
+  claude plugin uninstall feature-loop
+  claude plugin marketplace remove feature-loop
+  claude plugin marketplace add ecukalla/feature-loop
+  claude plugin install feature-loop@ecukalla-plugins
+  ```
+
+  Closes #11.
+
 ## [0.1.5] — 2026-05-29
 
 ### Fixed
