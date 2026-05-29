@@ -197,9 +197,12 @@ setup() {
 
 @test "feature-loop piped output emits ==> headers and contains no escape codes" {
   # The engine runs headless in Docker with phase output piped to logs, so the
-  # color/spinner/in-place display MUST be no-ops off-TTY: zero \033 (ESC) in
-  # captured stdout. bats already runs the engine off-TTY, so a plain run is the
-  # off-TTY case. The ==> headers must still appear (they replaced the === recap).
+  # color/spinner/in-place display MUST be no-ops off-TTY: zero \033 (ESC) AND
+  # zero \r (CR) in BOTH captured stdout AND every tasks/logs/* file. \r is the
+  # primary mechanism of this feature (spin's carriage return, the gate panel's
+  # CUU/EL), so the guard must cover it, not just ESC. bats already runs the
+  # engine off-TTY, so a plain run is the off-TTY case. The ==> headers must
+  # still appear (they replaced the === recap).
   tmp="$(mktemp -d)"
   out="$tmp/out.txt"
   (
@@ -216,7 +219,7 @@ setup() {
     git remote add origin ../upstream.git
     git push -q origin main
     FL_CLAUDE=true FL_MAX_ITERS=1 FL_ARCHIVE_DIR="$tmp/arc" \
-      FL_BASE_BRANCH=main FL_RETROSPECTIVE=0 \
+      FL_BASE_BRANCH=main FL_RETROSPECTIVE=0 FL_WT_DIR="$tmp/wt" \
       "$FL" TKT slug
   ) > "$out" 2> /dev/null
   rc=$?
@@ -224,7 +227,12 @@ setup() {
   has_header=0
   no_escape=1
   grep -qF '==>' "$out" && has_header=1
+  # stdout: no ESC, no CR
   grep -q "$(printf '\033')" "$out" && no_escape=0
+  grep -q "$(printf '\r')" "$out" && no_escape=0
+  # logs: no ESC, no CR in any tasks/logs/* file
+  grep -rq "$(printf '\033')" "$tmp/wt/tasks/logs" && no_escape=0
+  grep -rq "$(printf '\r')" "$tmp/wt/tasks/logs" && no_escape=0
 
   rm -rf "$tmp"
   [ "$rc" -eq 0 ]
