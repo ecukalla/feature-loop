@@ -6,3 +6,11 @@ updates:
       interval: weekly
     commit-message:
       prefix: ci
+  # Tracks the Claude CLI pinned in tools/package.json (used by the
+  # validate-plugin CI job). Weekly bumps keep the security-relevant pin fresh.
+  - package-ecosystem: npm
+    directory: /tools
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci

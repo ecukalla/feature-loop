@@ -50,7 +50,11 @@ jobs:
       - uses: actions/setup-node@v6.4.0
         with:
           node-version: "22"
-      - run: npm install -g @anthropic-ai/claude-code
+      # Install the Claude CLI from the tracked, version-pinned lockfile in tools/
+      # rather than `npm install -g` (which pulls whatever `latest` resolves to on
+      # every run). Dependabot bumps the pin; see tools/package.json and SECURITY.md.
+      - run: npm --prefix tools ci
+      - run: echo "$GITHUB_WORKSPACE/tools/node_modules/.bin" >> "$GITHUB_PATH"
       # --strict treats warnings as errors so an unknown field or missing
       # required field on the plugin or marketplace manifest fails the build.
       - run: claude plugin validate --strict .claude-plugin/marketplace.json
