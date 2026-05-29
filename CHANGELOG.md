@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-29
+
 ### Changed
 
 - The plugin marketplace was renamed from `feature-loop` to `ecukalla-plugins` to
@@ -170,7 +172,8 @@ Initial release.
 - `.editorconfig`, `.gitattributes`, `.shellcheckrc`, `.markdownlint.yaml`.
 - GitHub issue forms, PR template, `CODEOWNERS`.
 
-[Unreleased]: https://github.com/ecukalla/feature-loop/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/ecukalla/feature-loop/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ecukalla/feature-loop/releases/tag/v0.2.0
 [0.1.5]: https://github.com/ecukalla/feature-loop/releases/tag/v0.1.5
 [0.1.4]: https://github.com/ecukalla/feature-loop/releases/tag/v0.1.4
 [0.1.3]: https://github.com/ecukalla/feature-loop/releases/tag/v0.1.3
