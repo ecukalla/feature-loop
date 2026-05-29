@@ -1,5 +1,5 @@
 {
-  "name": "feature-loop",
+  "name": "ecukalla-plugins",
   "owner": { "name": "Edmond Cukalla" },
   "metadata": {
     "description": "Autonomous build → verify → fix loop for any repo, on top of agent-skills."
