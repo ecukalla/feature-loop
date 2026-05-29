@@ -40,8 +40,9 @@ if [ "$node_ok" -ne 1 ]; then
   rm -f /tmp/node.tar.xz
 fi
 
-# 3) Claude CLI (global)
-command -v claude > /dev/null 2>&1 || npm install -g @anthropic-ai/claude-code
+# 3) Claude CLI (global). Pinned: 2.1.154 (the Opus 4.8 launch) wedges headless `-p`
+#    runs with a 400 "thinking blocks cannot be modified" — see #27, anthropics/claude-code#63247.
+command -v claude > /dev/null 2>&1 || npm install -g @anthropic-ai/claude-code@2.1.156
 
 # 4) non-root runtime user
 id -u fluser > /dev/null 2>&1 || useradd -m -s /bin/bash fluser
