@@ -180,6 +180,56 @@ hdr() { printf '%s==>%s %s%s%s\n' "$C_BLUE" "$C_RESET" "$C_BOLD" "$*" "$C_RESET"
 warn() { printf '%sWarning:%s %s\n' "$C_BOLD" "$C_RESET" "$*" >&2; }
 err() { printf '%sError:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; }
 
+# Animation (spinner + live gate panel) needs a TTY and the FL_NO_SPINNER opt-out
+# unset. NO_COLOR does not disable it — color and animation are independent opt-outs.
+FL_ANIMATE=1
+{ [ "$FL_TTY" -eq 0 ] || [ "${FL_NO_SPINNER:-0}" = 1 ]; } && FL_ANIMATE=0
+# DECTCEM hide-cursor — only meaningful while animating; empty otherwise.
+C_CURSOR_HIDE=""
+[ "$FL_ANIMATE" -eq 1 ] && C_CURSOR_HIDE=$'\033[?25l'
+
+# Status marks + spinner frames: single-cell ✓/✗ and Homebrew's exact braille frame
+# sequence by default. FL_ASCII=1 swaps in ASCII for ambiguous-width (e.g. CJK) terminals.
+MARK_OK="✓" MARK_FAIL="✗"
+FL_FRAMES=(⠋ ⠙ ⠚ ⠞ ⠖ ⠦ ⠴ ⠲ ⠳ ⠓)
+if [ "${FL_ASCII:-0}" = 1 ]; then
+  MARK_OK="[OK]" MARK_FAIL="[XX]"
+  FL_FRAMES=('|' '/' '-' '\\')
+fi
+
+# spin <msg> <log> -- <cmd...>
+# Run <cmd...> with its output redirected to <log>, resolving to a single ✓/✗ line.
+# Attached: animate the braille spinner next to <msg> at ~0.1s. Off-TTY (or under
+# FL_NO_SPINNER): print one ==> header and run inline — no escape codes reach the
+# log or stdout. spin's exit status is the command's.
+spin() {
+  local msg="$1" log="$2" rc=0
+  shift 2
+  [ "${1:-}" = "--" ] && shift
+  if [ "$FL_ANIMATE" -eq 0 ]; then
+    hdr "$msg"
+    "$@" > "$log" 2>&1 || rc=$?
+    return "$rc"
+  fi
+  "$@" > "$log" 2>&1 &
+  local pid=$! i=0
+  printf '%s' "$C_CURSOR_HIDE"
+  while kill -0 "$pid" 2> /dev/null; do
+    printf '\r  %s%s%s %s' "$C_BLUE" "${FL_FRAMES[i % ${#FL_FRAMES[@]}]}" "$C_RESET" "$msg"
+    i=$((i + 1))
+    sleep 0.1
+  done
+  wait "$pid" || rc=$?
+  printf '\r\033[K' # carriage return + erase-in-line, then the resolved mark
+  if [ "$rc" -eq 0 ]; then
+    printf '  %s%s%s %s\n' "$C_GREEN" "$MARK_OK" "$C_RESET" "$msg"
+  else
+    printf '  %s%s%s %s\n' "$C_RED" "$MARK_FAIL" "$C_RESET" "$msg"
+  fi
+  printf '%s' "$C_CURSOR_SHOW"
+  return "$rc"
+}
+
 render_status() {
   local open="none" f
   if ls tasks/failures/*.md > /dev/null 2>&1; then
