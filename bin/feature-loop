@@ -221,11 +221,9 @@ spin() {
   done
   wait "$pid" || rc=$?
   printf '\r\033[K' # carriage return + erase-in-line, then the resolved mark
-  if [ "$rc" -eq 0 ]; then
-    printf '  %s%s%s %s\n' "$C_GREEN" "$MARK_OK" "$C_RESET" "$msg"
-  else
-    printf '  %s%s%s %s\n' "$C_RED" "$MARK_FAIL" "$C_RESET" "$msg"
-  fi
+  local color="$C_GREEN" mark="$MARK_OK"
+  [ "$rc" -eq 0 ] || { color="$C_RED" mark="$MARK_FAIL"; }
+  printf '  %s%s%s %s\n' "$color" "$mark" "$C_RESET" "$msg"
   printf '%s' "$C_CURSOR_SHOW"
   return "$rc"
 }
