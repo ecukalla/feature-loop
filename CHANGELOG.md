@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-05-29
+
 ### Fixed
 
 - Engine `build`/`test`/`simplify` phases now invoke their agent-skills skills by
