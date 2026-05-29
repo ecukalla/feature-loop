@@ -1,0 +1,9 @@
+{
+  "name": "feature-loop-tools",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Version-pinning tracking file for CI tooling. Not used at runtime; lets dependabot bump the Claude CLI used by the validate-plugin CI job.",
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.156"
+  }
+}

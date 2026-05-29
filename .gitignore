@@ -3,3 +3,4 @@
 tasks/
 .worktrees/
 .idea
+tools/node_modules/
