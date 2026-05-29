@@ -19,16 +19,19 @@ ENV NODE_VERSION=22.20.0 \
     DEBIAN_FRONTEND=noninteractive
 
 # Node, pinned to match the overlay (docker/overlay-bootstrap.sh), unpacked into /usr/local.
-# The tarball is verified against the release's published SHASUMS256.txt before unpacking, so a
-# corrupted or MITM'd download fails the build instead of landing on PATH for the gate run.
+# The expected SHA-256 is pinned literally here (per arch, from the release's SHASUMS256.txt)
+# rather than fetched at build time: a fetched checksum shares the tarball's origin, so an
+# attacker who can tamper with one can tamper with both. Pinning the hash in this tracked,
+# reviewed file means a substituted tarball — corrupted, truncated, or maliciously swapped —
+# fails the build instead of landing on PATH for the gate run. (Bump both hashes with NODE_VERSION.)
+ENV NODE_SHA256_x64=00bbd05e306ea68b6e13e17360d0e2f680b493ef95f2fea1c4296ff7437530bc \
+    NODE_SHA256_arm64=06907b9c088ce62305bc1530e5c1ae1510245114645768f7750c349c5b6fe667
 RUN arch="$(dpkg --print-architecture)" \
-  && case "$arch" in arm64) na=arm64 ;; *) na=x64 ;; esac \
+  && case "$arch" in arm64) na=arm64; sha="$NODE_SHA256_arm64" ;; *) na=x64; sha="$NODE_SHA256_x64" ;; esac \
   && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${na}.tar.xz" -o /tmp/node.tar.xz \
-  && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" -o /tmp/SHASUMS256.txt \
-  && sha="$(grep "  node-v${NODE_VERSION}-linux-${na}.tar.xz\$" /tmp/SHASUMS256.txt | cut -d' ' -f1)" \
-  && [ -n "$sha" ] && printf '%s  /tmp/node.tar.xz\n' "$sha" | sha256sum -c - \
+  && printf '%s  /tmp/node.tar.xz\n' "$sha" | sha256sum -c - \
   && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
-  && rm -f /tmp/node.tar.xz /tmp/SHASUMS256.txt
+  && rm -f /tmp/node.tar.xz
 
 # pre-commit (gate driver), bats (test runner), jq (manifest-lint helper). pre-commit
 # is installed via pipx into /usr/local/bin so it is on the non-root user's PATH. Pinned
