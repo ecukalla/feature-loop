@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Live terminal status for `bin/feature-loop` runs: colored `==>` section headers per
+  phase, a spinner during the long build/simplify calls, and a live in-place display of
+  the three concurrent gates (test / project / security) that resolves to `✓`/`✗` as
+  each finishes. Status is never color-only — a glyph and a word carry the meaning, so
+  it stays legible under `NO_COLOR`, in piped logs, and for red-green color vision
+  deficiency. Off-TTY (piped/headless/CI) the output is plain `==>` headers and result
+  lines with zero escape codes. New opt-outs: `NO_COLOR` (standard) drops color,
+  `FL_NO_SPINNER=1` drops the animation, `FL_ASCII=1` uses ASCII marks/frames. (#35)
+
+### Changed
+
+- The plain `=== … ===` stdout recap line from `feature-loop` is replaced by the `==>`
+  headers and a final summary; `tasks/STATUS.md` is unchanged. (#35)
+
 ## [0.3.0] — 2026-05-29
 
 ### Added

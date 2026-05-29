@@ -18,6 +18,23 @@ to start.
 | `FL_BUILD_PROMPT` / `FL_TEST_PROMPT` / `FL_SECURITY_PROMPT` / `FL_SIMPLIFY_PROMPT` / `FL_RETROSPECTIVE_PROMPT` | sensible defaults | Override the prompt for any phase. |
 | `FL_ARCHIVE_DIR` | `$HOME/.feature-loop` | Where each run is archived (`runs/<RUN_ID>/`). Read on the host; the docker runner bind-mounts this host path into the container at `/home/fluser/.feature-loop` and pins the engine's in-container `FL_ARCHIVE_DIR` to that target, so any value set here survives worktree teardown. Env wins over `.featureloop` for this var. |
 | `FL_RETROSPECTIVE` | `1` | Set to `0` to skip the post-run Claude reflection (saves one API call per run). |
+| `NO_COLOR` | *(unset)* | Standard [no-color.org](https://no-color.org) convention — set to any value to drop ANSI color from the terminal output. The spinner and headers still render (uncolored). |
+| `FL_NO_SPINNER` | *(unset)* | Set to `1` to drop the spinner animation and the live in-place gate display, leaving just the `==>` section headers and plain result lines. Color is unaffected. |
+| `FL_ASCII` | *(unset)* | Set to `1` to use ASCII status marks (`[OK]`/`[XX]`) and ASCII spinner frames instead of the Unicode `✓`/`✗` + braille frames — for CJK "ambiguous-width" terminals or anywhere the single-cell glyphs misalign. |
+
+## Terminal output
+
+When stdout is an interactive terminal, the engine shows colored `==>` section
+headers per phase, a spinner during the long build/simplify calls, and a live
+in-place display of the three concurrent gates that resolves to `✓`/`✗` as each
+finishes. Status is never conveyed by color alone — a glyph (`✓`/`✗`) and a word
+(`pass`/`FAIL`) carry the meaning, so it stays legible under `NO_COLOR`, in piped
+logs, and for red-green color vision deficiency.
+
+When stdout is **not** a TTY (piped, headless, CI — including every Docker run that
+isn't attached), color and animation are no-ops: the output is plain `==>` headers
+and plain result lines with zero escape codes, so captured logs stay clean. Tune it
+with `NO_COLOR`, `FL_NO_SPINNER`, and `FL_ASCII` above.
 
 ## Per-run archive
 

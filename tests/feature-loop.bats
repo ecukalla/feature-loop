@@ -193,6 +193,45 @@ setup() {
   [ "$archive_ok" -eq 1 ]
 }
 
+# --- live status: piped output stays plain (ISSUE-35) --------------------------------
+
+@test "feature-loop piped output emits ==> headers and contains no escape codes" {
+  # The engine runs headless in Docker with phase output piped to logs, so the
+  # color/spinner/in-place display MUST be no-ops off-TTY: zero \033 (ESC) in
+  # captured stdout. bats already runs the engine off-TTY, so a plain run is the
+  # off-TTY case. The ==> headers must still appear (they replaced the === recap).
+  tmp="$(mktemp -d)"
+  out="$tmp/out.txt"
+  (
+    cd "$tmp" || exit 1
+    git init --bare -q upstream.git
+    git init -q -b main work
+    cd work || exit 1
+    echo 'FL_GATES=true' > .featureloop
+    mkdir tasks
+    echo 'todo' > tasks/plan.md
+    echo x > README.md
+    git add -A
+    git -c user.email=t@t -c user.name=t commit -qm init
+    git remote add origin ../upstream.git
+    git push -q origin main
+    FL_CLAUDE=true FL_MAX_ITERS=1 FL_ARCHIVE_DIR="$tmp/arc" \
+      FL_BASE_BRANCH=main FL_RETROSPECTIVE=0 \
+      "$FL" TKT slug
+  ) > "$out" 2> /dev/null
+  rc=$?
+
+  has_header=0
+  no_escape=1
+  grep -qF '==>' "$out" && has_header=1
+  grep -q "$(printf '\033')" "$out" && no_escape=0
+
+  rm -rf "$tmp"
+  [ "$rc" -eq 0 ]
+  [ "$has_header" -eq 1 ]
+  [ "$no_escape" -eq 1 ]
+}
+
 # --- --auth oauth uses an unpredictable tempfile path (symlink defense) --------------
 
 @test "feature-loop-docker --auth oauth on macOS never writes to a predictable tempfile" {
