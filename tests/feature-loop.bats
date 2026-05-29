@@ -446,3 +446,27 @@ EOF
   rm -rf "$tmp"
   [ "$rc" -eq 0 ]
 }
+
+# --- regression: the devcontainer build workflow must stay protective (#30) ---
+
+@test "devcontainer.yml smoke-tests every gate-toolchain binary" {
+  # This workflow exists because a broken Dockerfile (the #18 xz-utils drop, #29 fix)
+  # merged green since nothing built it. The fix is itself a test, but it only catches
+  # that regression class while its smoke list stays complete — dropping a tool (e.g.
+  # xz --version) would let the workflow pass green while no longer guarding the base.
+  WF="$REPO_ROOT/.github/workflows/devcontainer.yml"
+  for tool in "node --version" "go version" "pre-commit --version" \
+    "bats --version" "jq --version" "xz --version"; do
+    grep -qF "$tool" "$WF" || {
+      echo "missing smoke check: $tool" >&2
+      return 1
+    }
+  done
+}
+
+@test "devcontainer.yml is path-filtered to .devcontainer changes" {
+  # The path filter is what makes the build trigger when the base could have changed.
+  # If it stops covering .devcontainer/**, the workflow goes dormant and the regression
+  # class returns silently.
+  grep -qF '.devcontainer/**' "$REPO_ROOT/.github/workflows/devcontainer.yml"
+}
