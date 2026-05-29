@@ -376,6 +376,22 @@ EOF
   grep -q 'code-simplification skill' "$FL"
 }
 
+# --- regression: CI must install the Claude CLI from the pinned lockfile (ISSUE-10) ---
+
+@test "ci.yml does not install the Claude CLI unpinned" {
+  # A bare `npm install -g @anthropic-ai/claude-code` pulls whatever `latest`
+  # resolves to on every CI run — a supply-chain risk. The validate-plugin job
+  # must install from the tracked tools/ lockfile instead. This regresses if the
+  # unpinned global install (no @<version>, no lockfile) ever re-appears.
+  run grep -nE 'npm install -g @anthropic-ai/claude-code([^@]|$)' \
+    "$REPO_ROOT/.github/workflows/ci.yml"
+  [ "$status" -ne 0 ]
+}
+
+@test "ci.yml installs the Claude CLI from the tools lockfile" {
+  grep -q 'npm --prefix tools ci' "$REPO_ROOT/.github/workflows/ci.yml"
+}
+
 # --- regression: gates run against a clean checkout, not the bind-mount (#23) ---
 
 @test "gate phase ignores spurious worktree +x bits by gating a clean checkout" {
