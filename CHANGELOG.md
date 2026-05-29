@@ -6,6 +6,35 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-05-29
+
+### Fixed
+
+- The overlay now pins the Claude CLI to `2.1.156` instead of installing whatever
+  `latest` resolves to. `latest` became `2.1.154` (the Opus 4.8 launch) on 2026-05-28,
+  which wedges headless `claude -p` runs with a `400 "thinking … blocks cannot be
+  modified"` — the autonomous writer crashed every iteration and produced no commits.
+  Pinned to the verified-good `2.1.156`, overridable via `CLAUDE_CODE_VERSION` (still
+  presence-guarded, so a base that already ships `claude` keeps it). Closes #27.
+- `.devcontainer/Dockerfile` (this repo's gate-toolchain base) builds again: it installs
+  `xz-utils` before unpacking the Node tarball. A prior change dropped it and ran the apt
+  step after the download, so `tar -xJf` failed with `xz: Cannot exec`. (#29)
+
+### Security
+
+- CI's `validate-plugin` job installs the Claude CLI from a tracked, version-pinned
+  lockfile (`tools/package.json` → `2.1.156`, via `npm --prefix tools ci`) instead of
+  `npm install -g @anthropic-ai/claude-code`, which pulled `latest` on every run.
+  Dependabot tracks the pin weekly; a bats regression guards the unpinned form from
+  returning. Closes #10.
+
+### Added
+
+- This repo's own dogfooding config — a tracked root `.featureloop` and
+  `.devcontainer/Dockerfile` (Go 1.25 + Node 22.20 + pre-commit + bats + jq) — so
+  `/auto-feature` can run feature-loop on itself durably. Kept off the generic plugin
+  surface; consumers still bring their own base. Closes #18.
+
 ## [0.1.4] — 2026-05-29
 
 ### Fixed
@@ -122,7 +151,9 @@ Initial release.
 - `.editorconfig`, `.gitattributes`, `.shellcheckrc`, `.markdownlint.yaml`.
 - GitHub issue forms, PR template, `CODEOWNERS`.
 
-[Unreleased]: https://github.com/ecukalla/feature-loop/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/ecukalla/feature-loop/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/ecukalla/feature-loop/releases/tag/v0.1.5
+[0.1.4]: https://github.com/ecukalla/feature-loop/releases/tag/v0.1.4
 [0.1.3]: https://github.com/ecukalla/feature-loop/releases/tag/v0.1.3
 [0.1.2]: https://github.com/ecukalla/feature-loop/releases/tag/v0.1.2
 [0.1.1]: https://github.com/ecukalla/feature-loop/releases/tag/v0.1.1
