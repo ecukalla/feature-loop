@@ -109,6 +109,10 @@ FL_MAX_BUDGET_USD="${FL_MAX_BUDGET_USD:-}"
 # slow phase reads as progressing rather than hung in headless/piped logs (ISSUE-48). The
 # attached-TTY spinner already conveys this; 0 disables the tick.
 FL_HEARTBEAT_SECS="${FL_HEARTBEAT_SECS:-60}"
+# Commit/PR attribution: 0 (default) suppresses the "Co-Authored-By: Claude" /
+# "Generated with Claude Code" trailer so the loop's commits follow a no-AI-
+# attribution convention; 1 restores Claude Code's default attribution.
+FL_COMMIT_ATTRIBUTION="${FL_COMMIT_ATTRIBUTION:-0}"
 # shellcheck disable=SC1091
 [ "$NO_CONFIG" -eq 0 ] && [ -f "$REPO_ROOT/.featureloop" ] && . "$REPO_ROOT/.featureloop"
 [ -n "$_FL_ARCHIVE_DIR_ENV" ] && FL_ARCHIVE_DIR="$_FL_ARCHIVE_DIR_ENV"
@@ -133,6 +137,16 @@ case "$GIT_COMMON_DIR" in /*) : ;; *) GIT_COMMON_DIR="$REPO_ROOT/$GIT_COMMON_DIR
 WT_DIR="${FL_WT_DIR:-$REPO_ROOT/.worktrees/$TICKET}"
 BRANCH="feature/${TICKET}-${SLUG}"
 FLAGS=(--dangerously-skip-permissions)
+# Suppress AI attribution by default. The host ~/.claude is intentionally never
+# mounted, so the convention can't reach the container that way; instead pass it on
+# every `claude` call via --settings, which outranks every settings.json scope but
+# "managed", so it holds regardless of the base image. Both keys are set on purpose:
+# includeCoAuthoredBy is the stable (deprecated-but-honored) switch and
+# attribution.{commit,pr} the current one — a renamed/ignored key just no-ops.
+# FL_COMMIT_ATTRIBUTION=1 omits the flag, restoring Claude Code's default trailer.
+if [ "$FL_COMMIT_ATTRIBUTION" != "1" ]; then
+  FLAGS+=(--settings '{"includeCoAuthoredBy":false,"attribution":{"commit":"","pr":""}}')
+fi
 
 # Prefix that bounds each `claude -p` phase by wall-clock. `timeout` (GNU coreutils) is
 # present in the Docker base and on CI; when it's missing (e.g. a bare host) the prefix

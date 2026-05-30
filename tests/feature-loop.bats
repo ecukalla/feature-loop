@@ -1015,3 +1015,84 @@ EOF
   [ "$ticked" -eq 1 ]
   [ "$plain" -eq 1 ]
 }
+
+# --- commit attribution suppression / opt-out (ISSUE-50) -----------------------------
+#
+# Every claude call the engine makes must carry --settings disabling the
+# "Co-Authored-By: Claude" / "Generated with Claude Code" trailer by default, so the
+# loop's commits honor the no-AI-attribution convention. The host ~/.claude is never
+# mounted, so --settings (which outranks every settings.json scope but "managed") is
+# how the convention reaches the in-container agent. FL_COMMIT_ATTRIBUTION=1 opts out.
+
+# Run the engine once with a claude stub that logs its argv to $tmp/claude-args.log,
+# leaving the log at "$1/claude-args.log". $2 is an extra line for .featureloop
+# (e.g. an opt-out toggle); $3..  are extra `VAR=value` env prefixes for the engine.
+_run_engine_logging_claude_args() {
+  local tmp="$1" extra_cfg="$2"
+  shift 2
+  local stub="$tmp/claude"
+  cat > "$stub" << EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$tmp/claude-args.log"
+exit 0
+EOF
+  chmod +x "$stub"
+  (
+    cd "$tmp" || exit 1
+    git init --bare -q up.git
+    git init -q -b main work
+    cd work || exit 1
+    {
+      echo 'FL_GATES=true'
+      [ -n "$extra_cfg" ] && echo "$extra_cfg"
+    } > .featureloop
+    mkdir tasks
+    echo todo > tasks/plan.md
+    echo x > README.md
+    git add -A
+    git -c user.email=t@t -c user.name=t commit -qm init
+    git remote add origin ../up.git
+    git push -q origin main
+    env "$@" \
+      FL_CLAUDE="$stub" FL_MAX_ITERS=1 FL_ARCHIVE_DIR="$tmp/arc" \
+      FL_BASE_BRANCH=main FL_RETROSPECTIVE=0 FL_WT_DIR="$tmp/wt" \
+      "$FL" TKT slug
+  ) > /dev/null 2>&1
+}
+
+@test "engine suppresses commit attribution by default (passes --settings to claude)" {
+  tmp="$(mktemp -d)"
+  _run_engine_logging_claude_args "$tmp" ""
+  rc=$?
+  has_flag=0
+  suppresses=0
+  grep -qxF -- '--settings' "$tmp/claude-args.log" && has_flag=1
+  grep -qF '"includeCoAuthoredBy":false' "$tmp/claude-args.log" &&
+    grep -qF '"attribution":{"commit":"","pr":""}' "$tmp/claude-args.log" && suppresses=1
+  rm -rf "$tmp"
+  [ "$rc" -eq 0 ]
+  [ "$has_flag" -eq 1 ]
+  [ "$suppresses" -eq 1 ]
+}
+
+@test "engine restores attribution with FL_COMMIT_ATTRIBUTION=1 from the environment" {
+  tmp="$(mktemp -d)"
+  _run_engine_logging_claude_args "$tmp" "" FL_COMMIT_ATTRIBUTION=1
+  rc=$?
+  no_flag=1
+  grep -qxF -- '--settings' "$tmp/claude-args.log" && no_flag=0
+  rm -rf "$tmp"
+  [ "$rc" -eq 0 ]
+  [ "$no_flag" -eq 1 ]
+}
+
+@test "engine reads the FL_COMMIT_ATTRIBUTION opt-out from .featureloop" {
+  tmp="$(mktemp -d)"
+  _run_engine_logging_claude_args "$tmp" 'FL_COMMIT_ATTRIBUTION=1'
+  rc=$?
+  no_flag=1
+  grep -qxF -- '--settings' "$tmp/claude-args.log" && no_flag=0
+  rm -rf "$tmp"
+  [ "$rc" -eq 0 ]
+  [ "$no_flag" -eq 1 ]
+}
