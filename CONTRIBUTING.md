@@ -24,6 +24,9 @@ shellcheck/shfmt/markdownlint/gitleaks-clean.
 - **Shell:** `bash` with `set -euo pipefail`, formatted by `shfmt -i 2 -ci -sr`, and
   shellcheck-clean at `--severity=warning`.
 - **Scope:** prefer the boring, obvious change. New behavior needs a `bats` test.
+- **Issues:** for a plan-shaped work item meant to drive `/auto-feature`, follow
+  [`docs/creating-an-issue.md`](docs/creating-an-issue.md). Thin bug/feature reports use
+  the issue forms as-is.
 
 ## Pull requests
 
