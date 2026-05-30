@@ -6,8 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-05-31
+
 ### Added
 
+- `--dry-run` / `FL_DRY_RUN=1` and `--hermetic` for `bin/feature-loop`: exercise the full
+  orchestration (worktree, STATUS.md, gates, archive) with zero `claude` calls and zero
+  token spend. `--hermetic` also stubs `FL_GATES`. Dry-run runs are tagged in the archive
+  (`summary.json` `dry_run` flag and `(dry-run)` markers in STATUS.md / summary.md /
+  INDEX.md). (#55)
 - `FL_COMMIT_ATTRIBUTION` knob (`.featureloop` / environment, default `0`). Set it to `1`
   to restore Claude Code's `Co-Authored-By: Claude` / "Generated with Claude Code"
   attribution trailer on the loop's commits and PRs. (#50)
@@ -287,7 +294,8 @@ Initial release.
 - `.editorconfig`, `.gitattributes`, `.shellcheckrc`, `.markdownlint.yaml`.
 - GitHub issue forms, PR template, `CODEOWNERS`.
 
-[Unreleased]: https://github.com/ecukalla/feature-loop/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/ecukalla/feature-loop/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/ecukalla/feature-loop/releases/tag/v0.5.1
 [0.5.0]: https://github.com/ecukalla/feature-loop/releases/tag/v0.5.0
 [0.4.2]: https://github.com/ecukalla/feature-loop/releases/tag/v0.4.2
 [0.4.1]: https://github.com/ecukalla/feature-loop/releases/tag/v0.4.1

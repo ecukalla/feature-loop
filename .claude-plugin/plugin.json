@@ -1,7 +1,7 @@
 {
   "name": "feature-loop",
   "description": "Autonomous build → verify → fix loop on top of the agent-skills plugin.",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "author": { "name": "Edmond Cukalla" },
   "homepage": "https://github.com/ecukalla/feature-loop",
   "repository": "https://github.com/ecukalla/feature-loop",
