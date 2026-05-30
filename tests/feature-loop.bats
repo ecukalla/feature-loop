@@ -517,3 +517,58 @@ EOF
   # class returns silently.
   grep -qF '.devcontainer/**' "$REPO_ROOT/.github/workflows/devcontainer.yml"
 }
+
+# --- regression: a green run commits the /code-simplify changes (ISSUE-41) -----------
+
+@test "green run commits the code-simplify changes, leaving a clean worktree" {
+  # The /code-simplify agent is told NOT to commit, and the engine had no commit of
+  # its own, so a green run left the simplify cleanup as uncommitted tracked changes:
+  # the gate passed on bytes that only existed in the working tree, and pushing the
+  # branch tip silently dropped them. The engine must commit the simplify diff after
+  # the post-simplify gate passes. Stub claude appends to a tracked file ONLY on the
+  # simplify call (matched by prompt), reproducing that uncommitted hunk.
+  tmp="$(mktemp -d)"
+  stub="$tmp/claude"
+  cat > "$stub" << 'EOF'
+#!/usr/bin/env bash
+# feature-loop invokes: claude --dangerously-skip-permissions -p <prompt>
+prompt="${*: -1}"
+case "$prompt" in
+  *simplification*) printf 'simplified\n' >> tracked.txt ;;
+esac
+exit 0
+EOF
+  chmod +x "$stub"
+
+  wt="$tmp/wt"
+  (
+    cd "$tmp" || exit 1
+    git init --bare -q upstream.git
+    git init -q -b main work
+    cd work || exit 1
+    echo 'FL_GATES=true' > .featureloop
+    mkdir tasks
+    echo 'todo' > tasks/plan.md
+    printf 'original\n' > tracked.txt
+    git add -A
+    git -c user.email=t@t -c user.name=t commit -qm init
+    git remote add origin ../upstream.git
+    git push -q origin main
+    FL_CLAUDE="$stub" FL_MAX_ITERS=1 FL_ARCHIVE_DIR="$tmp/arc" \
+      FL_BASE_BRANCH=main FL_RETROSPECTIVE=0 FL_WT_DIR="$wt" \
+      "$FL" TKT slug
+  ) > /dev/null 2>&1
+  rc=$?
+
+  # No uncommitted tracked changes remain (the simplify hunk was committed).
+  clean=0
+  [ -z "$(git -C "$wt" status --porcelain --untracked-files=no)" ] && clean=1
+  # And the simplify change actually landed in a commit, not just the working tree.
+  committed=0
+  git -C "$wt" show HEAD:tracked.txt 2> /dev/null | grep -q simplified && committed=1
+
+  rm -rf "$tmp"
+  [ "$rc" -eq 0 ]
+  [ "$clean" -eq 1 ]
+  [ "$committed" -eq 1 ]
+}
