@@ -8,6 +8,11 @@
 FL_BASE_BRANCH=main
 FL_RETROSPECTIVE=0
 
+# Keep AI attribution out of this project's commits/PRs (0, the default) or restore the
+# Co-Authored-By / "Generated with Claude Code" trailer (1). This repo follows the
+# no-AI-attribution convention, so it stays at 0.
+FL_COMMIT_ATTRIBUTION=0
+
 # Build this repo's gate toolchain (golang + Node + pre-commit + bats + jq) as the base.
 # Set explicitly: the engine defaults FL_DOCKERFILE to empty (→ a neutral public base),
 # regardless of what the docs table lists as the default.

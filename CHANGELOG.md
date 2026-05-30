@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `FL_COMMIT_ATTRIBUTION` knob (`.featureloop` / environment, default `0`). Set it to `1`
+  to restore Claude Code's `Co-Authored-By: Claude` / "Generated with Claude Code"
+  attribution trailer on the loop's commits and PRs. (#50)
+
+### Fixed
+
+- Commits the in-container agent authors no longer carry a `Co-Authored-By: Claude` /
+  "Generated with Claude Code" trailer by default, which violated the no-AI-attribution
+  convention. The host `~/.claude` is never mounted, so the engine now passes the
+  suppression on every `claude` call via the `--settings` flag (which outranks every
+  `settings.json` scope but managed), holding regardless of the base image. (#50)
+
 ## [0.5.0] — 2026-05-30
 
 ### Added
