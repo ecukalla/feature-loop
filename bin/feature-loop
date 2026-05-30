@@ -494,6 +494,29 @@ run_gates() {
   render_status
 }
 
+# Commit the /code-simplify phase's tracked changes so the branch tip is shippable.
+# FL_SIMPLIFY_PROMPT tells the agent NOT to commit and the build agent is the only
+# other writer, so without this the green gate passes on tracked-but-uncommitted bytes
+# and pushing the tip silently drops the cleanup (ISSUE-41). Engine-side so the commit
+# is deterministic regardless of prompt overrides. Only tracked changes are staged —
+# exactly what the post-simplify gate materialized via `git diff HEAD`. No-op when
+# simplify changed nothing. A fallback identity is supplied only when none is configured.
+fl_commit_simplify() {
+  git diff --quiet HEAD -- && return 0
+  git add -u
+  # Fall back to a synthetic identity only when the repo has none configured
+  # (e.g. CI / fresh clones). Passed as env vars, NOT a `git -c …` array:
+  # expanding an empty array with "${arr[@]}" under `set -u` aborts on macOS's
+  # stock Bash 3.2 — exactly the local-dev case this fix targets (ISSUE-41).
+  if git config user.email > /dev/null 2>&1; then
+    git commit -q -m "refactor(${TICKET}): apply /code-simplify cleanup"
+  else
+    GIT_AUTHOR_NAME=feature-loop GIT_AUTHOR_EMAIL=feature-loop@localhost \
+      GIT_COMMITTER_NAME=feature-loop GIT_COMMITTER_EMAIL=feature-loop@localhost \
+      git commit -q -m "refactor(${TICKET}): apply /code-simplify cleanup"
+  fi
+}
+
 GREEN=0
 for i in $(seq 1 "$FL_MAX_ITERS"); do
   ITER="$i"
@@ -520,6 +543,7 @@ spin "Code simplify" "tasks/logs/simplify.log" -- \
   "$FL_CLAUDE" "${FLAGS[@]}" -p "$FL_SIMPLIFY_PROMPT" || true
 
 if gates_in_clean_tree tasks/logs/gates-final.log; then
+  fl_commit_simplify
   ST_SIMP="done"
   render_status
   # Final summary in a green header (the one place a non-blue header is used).
