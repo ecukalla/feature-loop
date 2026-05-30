@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-05-30
+
 ### Added
 
 - Per-phase wall-clock timeout for `bin/feature-loop`: every token-spending `claude -p`
@@ -30,6 +32,15 @@ All notable changes to this project are documented here. The format follows
   throttling: the elapsed-time tick makes a throttled phase visibly slow, and a timed-out
   phase's log tail (captured in its failure file) shows whatever the CLI emitted. No 429
   parsing is added because the CLI logs no structured rate-limit signal to key on. (#48)
+
+### Fixed
+
+- `bin/feature-loop` now exits non-zero when a run aborts mid-flight instead of reporting
+  success. On macOS's stock Bash 3.2 a `set -u` fatal expansion (unbound scalar or empty
+  array) enters the `EXIT` trap with `$?==0`, so a crashed run used to exit `0` and read as
+  green to the docker wrapper, CI, and humans. `on_exit` now derives the exit code from the
+  explicit `OUTCOME` signal — a propagated failure keeps its code, and only a run that
+  reached green may exit `0`. (#45)
 
 ## [0.4.2] — 2026-05-30
 
@@ -262,7 +273,8 @@ Initial release.
 - `.editorconfig`, `.gitattributes`, `.shellcheckrc`, `.markdownlint.yaml`.
 - GitHub issue forms, PR template, `CODEOWNERS`.
 
-[Unreleased]: https://github.com/ecukalla/feature-loop/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/ecukalla/feature-loop/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/ecukalla/feature-loop/releases/tag/v0.5.0
 [0.4.2]: https://github.com/ecukalla/feature-loop/releases/tag/v0.4.2
 [0.4.1]: https://github.com/ecukalla/feature-loop/releases/tag/v0.4.1
 [0.4.0]: https://github.com/ecukalla/feature-loop/releases/tag/v0.4.0
