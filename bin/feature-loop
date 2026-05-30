@@ -393,6 +393,7 @@ EOF
 }
 
 on_exit() {
+  local rc=$?
   # Restore the cursor in case an interrupted spinner left it hidden. Empty
   # off-TTY, so this is a no-op for piped/headless runs. Fires on EXIT and (via
   # the trap below) on INT/TERM.
@@ -400,6 +401,17 @@ on_exit() {
   render_status 2> /dev/null || true
   run_retrospective || true
   archive_run "${OUTCOME:-unknown}" || true
+  # Derive the exit code from an explicit success signal, not $? (ISSUE-45). On
+  # macOS's stock Bash 3.2 a `set -u` abort (unbound scalar or empty-array
+  # expansion) enters this EXIT trap with $?==0, so a crashed run would exit 0 and
+  # read as green to the docker wrapper / CI / humans. A propagated failure
+  # (set -e, explicit `exit N`, command-not-found, the INT/TERM re-exits) keeps its
+  # code; otherwise only a run that reached OUTCOME=green may exit 0.
+  if [ "$rc" -ne 0 ]; then
+    exit "$rc"
+  elif [ "$OUTCOME" != green ]; then
+    exit 1
+  fi
 }
 trap on_exit EXIT
 # Route INT/TERM through a normal exit so the EXIT trap restores the cursor and
