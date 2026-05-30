@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-05-30
+
 ### Added
 
 - `docs/creating-an-issue.md` documents how to write a plan-shaped work item — the kind
@@ -16,6 +18,17 @@ All notable changes to this project are documented here. The format follows
   judgment calls: verification must map to `FL_GATES`, new behavior needs a `bats` test,
   generic surface vs. this repo's own config, and semver intent. Cross-linked from
   `CONTRIBUTING.md` and `docs/working-an-issue.md`. (#21)
+
+### Fixed
+
+- The live status spinner no longer floods the output with one line per frame when
+  `feature-loop` runs under a PTY that doesn't collapse carriage returns (a capture/relay,
+  an IDE/agent terminal, `docker logs`). The animation now also stands down when `TERM`
+  is empty or `dumb` or when `CI` is set, alongside the existing TTY and `FL_NO_SPINNER`
+  checks. `feature-loop-docker` forwards `FL_NO_SPINNER` / `NO_COLOR` / `FL_ASCII` / `CI`
+  into the container when set, and `TERM` only when a terminal is attached — so the
+  documented `FL_NO_SPINNER` kill switch now actually reaches the engine on Docker runs,
+  while genuinely-attached runs keep their live status. Closes #43.
 
 ## [0.4.1] — 2026-05-30
 
@@ -224,7 +237,8 @@ Initial release.
 - `.editorconfig`, `.gitattributes`, `.shellcheckrc`, `.markdownlint.yaml`.
 - GitHub issue forms, PR template, `CODEOWNERS`.
 
-[Unreleased]: https://github.com/ecukalla/feature-loop/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/ecukalla/feature-loop/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/ecukalla/feature-loop/releases/tag/v0.4.2
 [0.4.1]: https://github.com/ecukalla/feature-loop/releases/tag/v0.4.1
 [0.4.0]: https://github.com/ecukalla/feature-loop/releases/tag/v0.4.0
 [0.3.0]: https://github.com/ecukalla/feature-loop/releases/tag/v0.3.0
