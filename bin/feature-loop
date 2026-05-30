@@ -182,8 +182,17 @@ err() { printf '%sError:%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; }
 
 # Animation (spinner + live gate panel) needs a TTY and the FL_NO_SPINNER opt-out
 # unset. NO_COLOR does not disable it — color and animation are independent opt-outs.
+#
+# `[ -t 1 ]` is necessary but not sufficient: a PTY can be a capture/relay that
+# linearizes carriage returns, turning the in-place spinner into one line per frame
+# (ISSUE-43). So also stand down when the environment signals "not a real terminal":
+# TERM empty or `dumb`, or CI set. A genuine attached terminal exports a real TERM
+# (forwarded into Docker by feature-loop-docker), so it still animates.
 FL_ANIMATE=1
-{ [ "$FL_TTY" -eq 0 ] || [ "${FL_NO_SPINNER:-0}" = 1 ]; } && FL_ANIMATE=0
+{ [ "$FL_TTY" -eq 0 ] ||
+  [ "${FL_NO_SPINNER:-0}" = 1 ] ||
+  [ -z "${TERM:-}" ] || [ "${TERM:-}" = dumb ] ||
+  [ -n "${CI:-}" ]; } && FL_ANIMATE=0
 # DECTCEM hide-cursor — only meaningful while animating; empty otherwise.
 C_CURSOR_HIDE=""
 [ "$FL_ANIMATE" -eq 1 ] && C_CURSOR_HIDE=$'\033[?25l'

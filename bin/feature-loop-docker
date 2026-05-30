@@ -227,6 +227,20 @@ trap - EXIT INT TERM
 # 3) run the loop as the non-root user the overlay created
 TTY=""
 [ -t 0 ] && [ -t 1 ] && TTY="-t"
+
+# Forward the display-control env into the container so the documented opt-outs
+# actually reach the engine (ISSUE-43): without this, host `FL_NO_SPINNER=1
+# feature-loop-docker …` was silently dropped, leaving only the in-container
+# `.featureloop` value effective. FL_NO_SPINNER/NO_COLOR/FL_ASCII/CI are forwarded
+# whenever set; TERM only when a PTY is attached (`-t`), so it carries a real
+# terminal type that the engine's animation gate can trust — and stays absent on
+# unattached runs, where the gate then stands down on its own.
+DISPLAY_ENV_ARGS=()
+for v in FL_NO_SPINNER NO_COLOR FL_ASCII CI; do
+  [ -n "${!v:-}" ] && DISPLAY_ENV_ARGS+=(-e "$v")
+done
+[ -n "$TTY" ] && [ -n "${TERM:-}" ] && DISPLAY_ENV_ARGS+=(-e TERM)
+
 echo "==> running feature-loop for ${TICKET} (${SLUG})"
 # Pass TICKET and SLUG as positional args, not via shell interpolation — even with
 # IDENT_RE blocking quotes, the positional form removes the dependency on regex
@@ -239,6 +253,7 @@ mkdir -p "$FL_ARCHIVE_DIR"
 
 exec docker run --rm -i $TTY \
   "${DOCKER_AUTH_ARGS[@]}" \
+  ${DISPLAY_ENV_ARGS[@]+"${DISPLAY_ENV_ARGS[@]}"} \
   -e FL_ARCHIVE_DIR=/home/fluser/.feature-loop \
   -v "$REPO_ROOT:/workspace" -w /workspace \
   -v "$FL_ARCHIVE_DIR:/home/fluser/.feature-loop:rw" \
