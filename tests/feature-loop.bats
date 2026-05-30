@@ -11,6 +11,17 @@ setup() {
   LINT="$REPO_ROOT/scripts/lint-plugin-manifests.sh"
 }
 
+# Stub `docker` in PATH dir $1 to append its args (one per line) to $2/docker.log,
+# so tests can assert which `-e VAR` flags the runner forwarded.
+_stub_docker_logging_args() {
+  cat > "$1/docker" << EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$2/docker.log"
+exit 0
+EOF
+  chmod +x "$1/docker"
+}
+
 @test "feature-loop --version prints a version" {
   run "$FL" --version
   [ "$status" -eq 0 ]
@@ -238,6 +249,173 @@ setup() {
   [ "$rc" -eq 0 ]
   [ "$has_header" -eq 1 ]
   [ "$no_escape" -eq 1 ]
+}
+
+# --- live status: spinner is correct, not absent — relay/CI safe (ISSUE-43) ----------
+#
+# The #40 spinner gated on `[ -t 1 ]` alone, but a PTY can be a capture/relay that
+# linearizes carriage returns, so the in-place spinner floods one line per frame. The
+# fix (a) forwards the display-control env into the container so the documented opt-out
+# actually reaches the engine, and (b) strengthens the engine gate to stand down when
+# TERM is empty/dumb or CI is set, while a real attached terminal still animates.
+
+@test "feature-loop-docker forwards FL_NO_SPINNER/NO_COLOR/FL_ASCII/CI when set, but not TERM when unattached" {
+  # bats runs unattached, so the runner passes no `-t`: the display-control vars must
+  # still be forwarded (the documented host opt-out was previously dropped, Gap #1),
+  # but TERM must NOT be — without a PTY there is no real terminal type to forward.
+  tmp="$(mktemp -d)"
+  stub="$(mktemp -d)"
+  _stub_docker_logging_args "$stub" "$tmp"
+
+  (
+    cd "$tmp" || exit 1
+    git init -q
+    echo 'FL_GATES=true' > .featureloop
+    PATH="$stub:$PATH" ANTHROPIC_API_KEY=sk-test \
+      FL_NO_SPINNER=1 NO_COLOR=1 FL_ASCII=1 CI=1 TERM=xterm-256color \
+      "$FLD" TKT slug
+  ) > /dev/null 2>&1
+
+  fwd=1
+  for v in FL_NO_SPINNER NO_COLOR FL_ASCII CI; do
+    grep -qx "$v" "$tmp/docker.log" || fwd=0
+  done
+  term_absent=1
+  grep -qx TERM "$tmp/docker.log" && term_absent=0
+
+  rm -rf "$tmp" "$stub"
+  [ "$fwd" -eq 1 ]
+  [ "$term_absent" -eq 1 ]
+}
+
+@test "feature-loop-docker omits display-control env that is not set" {
+  # The forwarding is conditional: an unset var must not appear as a bare `-e VAR`
+  # (which would clear it inside the container, or worse leak the host's empty value).
+  tmp="$(mktemp -d)"
+  stub="$(mktemp -d)"
+  _stub_docker_logging_args "$stub" "$tmp"
+
+  (
+    cd "$tmp" || exit 1
+    git init -q
+    echo 'FL_GATES=true' > .featureloop
+    env -u FL_NO_SPINNER -u NO_COLOR -u FL_ASCII -u CI -u TERM \
+      PATH="$stub:$PATH" ANTHROPIC_API_KEY=sk-test "$FLD" TKT slug
+  ) > /dev/null 2>&1
+
+  absent=1
+  for v in FL_NO_SPINNER NO_COLOR FL_ASCII CI TERM; do
+    grep -qx "$v" "$tmp/docker.log" && absent=0
+  done
+
+  rm -rf "$tmp" "$stub"
+  [ "$absent" -eq 1 ]
+}
+
+@test "feature-loop-docker forwards TERM when attached to a PTY" {
+  # The other half of the gate: when a PTY IS attached, the host's real TERM is
+  # forwarded so the in-container engine can trust it and keep the live status (#40).
+  # `script` gives the child both a stdin and stdout PTY so `-t 0 && -t 1` holds.
+  command -v script > /dev/null 2>&1 || skip "script (util-linux) not available"
+
+  tmp="$(mktemp -d)"
+  stub="$(mktemp -d)"
+  _stub_docker_logging_args "$stub" "$tmp"
+
+  cat > "$tmp/runner.sh" << EOF
+#!/usr/bin/env bash
+cd "$tmp" || exit 1
+export PATH="$stub:\$PATH" ANTHROPIC_API_KEY=sk-test TERM=xterm-256color
+exec "$FLD" TKT slug
+EOF
+  chmod +x "$tmp/runner.sh"
+
+  (
+    cd "$tmp" || exit 1
+    git init -q
+    echo 'FL_GATES=true' > .featureloop
+    script -qec "$tmp/runner.sh" /dev/null
+  ) > /dev/null 2>&1
+
+  term_fwd=0
+  grep -qx TERM "$tmp/docker.log" && term_fwd=1
+
+  rm -rf "$tmp" "$stub"
+  [ "$term_fwd" -eq 1 ]
+}
+
+@test "feature-loop engine suppresses the spinner on a PTY under CI, TERM=dumb, or empty TERM (ISSUE-43)" {
+  # The core regression guard. Run the engine on a real PTY (so `[ -t 1 ]` holds and
+  # FL_TTY=1) but with CI=1 / TERM=dumb — the relay/headless signal. The spinner must
+  # stand down: zero "bare" carriage returns (a CR not part of a \r\n line ending) in
+  # the output. Color (\033) is intentionally still on for a PTY and is not asserted —
+  # ISSUE-43 is the \r flood, not color. A slow `claude` stub keeps the build alive
+  # long enough that an un-suppressed spinner WOULD emit frames (verified: ~12 bare CR
+  # without the gate, 0 with it), so this fails loudly if the gate regresses.
+  command -v script > /dev/null 2>&1 || skip "script (util-linux) not available"
+  command -v perl > /dev/null 2>&1 || skip "perl not available"
+
+  _bare_cr_under_pty() { # $1=env-line  -> echoes count of bare CR bytes
+    local d ts
+    d="$(mktemp -d)"
+    ts="$d/ts"
+    (
+      cd "$d" || exit 1
+      git init --bare -q up.git
+      git init -q -b main work
+      cd work || exit 1
+      echo 'FL_GATES=true' > .featureloop
+      mkdir tasks
+      echo todo > tasks/plan.md
+      echo x > README.md
+      git add -A
+      git -c user.email=t@t -c user.name=t commit -qm init
+      git remote add origin ../up.git
+      git push -q origin main
+    ) > /dev/null 2>&1
+    cat > "$d/slowclaude" << 'EOS'
+#!/usr/bin/env bash
+sleep 0.5
+exit 0
+EOS
+    chmod +x "$d/slowclaude"
+    cat > "$d/r.sh" << EOF
+#!/usr/bin/env bash
+cd "$d/work" || exit 1
+export FL_CLAUDE="$d/slowclaude" FL_MAX_ITERS=1 FL_ARCHIVE_DIR="$d/arc"
+export FL_BASE_BRANCH=main FL_RETROSPECTIVE=0 FL_WT_DIR="$d/wt"
+$1
+exec "$FL" TKT slug
+EOF
+    chmod +x "$d/r.sh"
+    script -qec "$d/r.sh" "$ts" > /dev/null 2>&1
+    # bare CR = carriage returns that are NOT part of a \r\n line ending (the PTY
+    # turns every \n into \r\n; the spinner adds bare \r that this strip leaves behind).
+    perl -0777 -pe 's/\r\n//g' "$ts" | tr -cd '\r' | wc -c
+    rm -rf "$d"
+  }
+
+  ci_cr="$(_bare_cr_under_pty 'export CI=1 TERM=xterm-256color')"
+  dumb_cr="$(_bare_cr_under_pty 'export TERM=dumb')"
+  # Issue headline case (plan.md Gap #2): a PTY with an empty TERM. TERM must be
+  # EXPORTED empty, not `unset` — bash re-defaults an unset TERM to `dumb` at startup,
+  # which would silently land in the dumb branch above and leave the `-z TERM` gate
+  # branch (bin/feature-loop:194) untested. An exported-empty TERM is the only thing
+  # that reaches it, so dropping that branch makes this case re-flood and fail.
+  empty_cr="$(_bare_cr_under_pty 'unset CI; export TERM=')"
+  # Symmetric positive guard (the fix's headline promise and the plan's named top
+  # risk, plan.md:53,69): a genuine attached terminal — real TERM, CI unset — must
+  # STILL animate. Every suppression case above stays green under an over-aggressive
+  # gate (unconditional FL_ANIMATE=0, an inverted condition, a `[ -n "$TERM" ]` typo);
+  # only this case catches a gate that silently drops #40's live status. Verified
+  # non-vacuous in both directions: 12 bare CR against the current engine, 0 if the
+  # gate is made unconditional.
+  live_cr="$(_bare_cr_under_pty 'unset CI; export TERM=xterm-256color')"
+
+  [ "$ci_cr" -eq 0 ]
+  [ "$dumb_cr" -eq 0 ]
+  [ "$empty_cr" -eq 0 ]
+  [ "$live_cr" -gt 0 ]
 }
 
 # --- --auth oauth uses an unpredictable tempfile path (symlink defense) --------------

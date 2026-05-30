@@ -19,7 +19,7 @@ to start.
 | `FL_ARCHIVE_DIR` | `$HOME/.feature-loop` | Where each run is archived (`runs/<RUN_ID>/`). Read on the host; the docker runner bind-mounts this host path into the container at `/home/fluser/.feature-loop` and pins the engine's in-container `FL_ARCHIVE_DIR` to that target, so any value set here survives worktree teardown. Env wins over `.featureloop` for this var. |
 | `FL_RETROSPECTIVE` | `1` | Set to `0` to skip the post-run Claude reflection (saves one API call per run). |
 | `NO_COLOR` | *(unset)* | Standard [no-color.org](https://no-color.org) convention — set to any value to drop ANSI color from the terminal output. The spinner and headers still render (uncolored). |
-| `FL_NO_SPINNER` | *(unset)* | Set to `1` to drop the spinner animation and the live in-place gate display, leaving just the `==>` section headers and plain result lines. Color is unaffected. |
+| `FL_NO_SPINNER` | *(unset)* | Set to `1` to drop the spinner animation and the live in-place gate display, leaving just the `==>` section headers and plain result lines. Color is unaffected. The spinner also auto-disables off-TTY and when `TERM` is empty/`dumb` or `CI` is set (see [Terminal output](#terminal-output)). Forwarded into Docker runs when set on the host. |
 | `FL_ASCII` | *(unset)* | Set to `1` to use ASCII status marks (`[OK]`/`[XX]`) and ASCII spinner frames instead of the Unicode `✓`/`✗` + braille frames — for CJK "ambiguous-width" terminals or anywhere the single-cell glyphs misalign. |
 
 ## Terminal output
@@ -35,6 +35,17 @@ When stdout is **not** a TTY (piped, headless, CI — including every Docker run
 isn't attached), color and animation are no-ops: the output is plain `==>` headers
 and plain result lines with zero escape codes, so captured logs stay clean. Tune it
 with `NO_COLOR`, `FL_NO_SPINNER`, and `FL_ASCII` above.
+
+A bare TTY is necessary but not sufficient — a PTY can be a capture/relay (an IDE or
+agent terminal, a CR-preserving log capture) that doesn't collapse the spinner's
+carriage returns in place, flooding the screen with one line per frame. So the spinner
+also stands down when `TERM` is empty or `dumb`, or when `CI` is non-empty, even on a
+TTY. A genuine attached terminal exports a real `TERM`, so it still animates; if a
+relay advertises a real `TERM` yet linearizes `\r`, set `FL_NO_SPINNER=1`.
+
+For Docker runs, the runner forwards `FL_NO_SPINNER`, `NO_COLOR`, `FL_ASCII`, and `CI`
+into the container whenever they are set in the host environment (so the opt-outs work
+without editing `.featureloop`), plus `TERM` only when a PTY is attached.
 
 ## Per-run archive
 
