@@ -750,3 +750,62 @@ EOF
   [ "$clean" -eq 1 ]
   [ "$committed" -eq 1 ]
 }
+
+# --- regression: a mid-run abort must not exit 0 (masked-green crash, ISSUE-45) -------
+
+@test "a mid-run abort with a zero \$? exits non-zero and prints no green DONE banner" {
+  # The EXIT trap (on_exit) used to inherit the script's \$?, so any abort that left
+  # \$?==0 made a crashed run exit 0 — green to the docker wrapper, CI, and humans. The
+  # masking class is a `set -u` fatal expansion (unbound scalar or empty-array) on
+  # macOS's stock Bash 3.2, which enters the trap with \$?==0 (measured; Bash 5.x instead
+  # leaves \$?==1, so a literal `set -u` abort would be a no-op guard on this CI). The
+  # fix derives the exit code from the explicit OUTCOME signal, not \$?: only a run that
+  # reached OUTCOME=green may exit 0. This drives that exact trap state — \$?==0 with
+  # OUTCOME never green — deterministically and cross-version by aborting the engine with
+  # a plain `exit 0` mid-flight: FL_GATES='exit 0' eval'd in the parent shell during the
+  # gate phase. (The gate normally runs against a clean materialized checkout in a
+  # subshell, which would swallow the exit; stubbing `git clone` to fail forces the
+  # in-place fallback that eval's FL_GATES in the parent.) Pre-fix this exits 0; post-fix
+  # it must exit non-zero and never reach the green DONE banner.
+  tmp="$(mktemp -d)"
+  stub="$tmp/stub"
+  mkdir "$stub"
+  realgit="$(command -v git)"
+  cat > "$stub/git" << EOF
+#!/usr/bin/env bash
+# Fail only \`git clone\` (used solely by the gate's clean-tree materialization) so the
+# engine falls back to eval'ing FL_GATES in the parent shell; delegate everything else.
+[ "\$1" = clone ] && exit 1
+exec "$realgit" "\$@"
+EOF
+  chmod +x "$stub/git"
+
+  wt="$tmp/wt"
+  rc=0
+  # `|| rc=$?` keeps bats's errexit from aborting the test on the engine's (expected)
+  # non-zero exit, and captures the real code to assert on.
+  (
+    cd "$tmp" || exit 1
+    git init --bare -q upstream.git
+    git init -q -b main work
+    cd work || exit 1
+    printf "FL_GATES='exit 0'\n" > .featureloop
+    mkdir tasks
+    echo 'todo' > tasks/plan.md
+    echo x > README.md
+    git add -A
+    git -c user.email=t@t -c user.name=t commit -qm init
+    git remote add origin ../upstream.git
+    git push -q origin main
+    PATH="$stub:$PATH" FL_CLAUDE=true FL_MAX_ITERS=1 FL_ARCHIVE_DIR="$tmp/arc" \
+      FL_BASE_BRANCH=main FL_RETROSPECTIVE=0 FL_WT_DIR="$wt" \
+      "$FL" TKT slug
+  ) > "$tmp/out.txt" 2>&1 || rc=$?
+
+  no_done=0
+  grep -qF 'DONE:' "$tmp/out.txt" || no_done=1
+
+  rm -rf "$tmp"
+  [ "$rc" -ne 0 ]
+  [ "$no_done" -eq 1 ]
+}
