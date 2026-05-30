@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `docs/creating-an-issue.md` documents how to write a plan-shaped work item — the kind
+  of issue whose body is piped verbatim into `tasks/plan.md` and executed by
+  `/auto-feature`. It covers the report-vs-plan-issue split, the
+  `gh issue view … > tasks/plan.md` contract, the plan skeleton (Problem, Decision,
+  Architecture, Task list, Out of scope, Checkpoints, Risks), and the repo-specific
+  judgment calls: verification must map to `FL_GATES`, new behavior needs a `bats` test,
+  generic surface vs. this repo's own config, and semver intent. Cross-linked from
+  `CONTRIBUTING.md` and `docs/working-an-issue.md`. (#21)
+
 ## [0.4.1] — 2026-05-30
 
 ### Fixed
