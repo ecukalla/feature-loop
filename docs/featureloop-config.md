@@ -18,6 +18,9 @@ to start.
 | `FL_BUILD_PROMPT` / `FL_TEST_PROMPT` / `FL_SECURITY_PROMPT` / `FL_SIMPLIFY_PROMPT` / `FL_RETROSPECTIVE_PROMPT` | sensible defaults | Override the prompt for any phase. |
 | `FL_ARCHIVE_DIR` | `$HOME/.feature-loop` | Where each run is archived (`runs/<RUN_ID>/`). Read on the host; the docker runner bind-mounts this host path into the container at `/home/fluser/.feature-loop` and pins the engine's in-container `FL_ARCHIVE_DIR` to that target, so any value set here survives worktree teardown. Env wins over `.featureloop` for this var. |
 | `FL_RETROSPECTIVE` | `1` | Set to `0` to skip the post-run Claude reflection (saves one API call per run). |
+| `FL_PHASE_TIMEOUT` | `1200` | Per-phase wall-clock bound (seconds) for every token-spending `claude -p` call (build, the test/security gates, simplify, retrospective). A throttled or wedged call is killed at the limit so it can't hang the run; a timed-out gate is marked failed and retried, and a timed-out post-green simplify is skipped so the green tip still ships. Requires GNU `timeout` (present in the Docker base and on CI); absent it, calls run unbounded. |
+| `FL_MAX_BUDGET_USD` | *(unset)* | Optional per-phase API-spend cap (USD), passed as `--max-budget-usd` to each `claude -p` call to bound a runaway agentic loop by cost. Opt-in — left unset there is no cap, so a guessed default can't silently truncate a legitimate multi-step phase. Complements `FL_PHASE_TIMEOUT` (wall-clock) with a cost ceiling. |
+| `FL_HEARTBEAT_SECS` | `60` | Interval (seconds) for the off-TTY "still running (Nm)" progress tick during long phases, so a slow phase reads as progressing rather than hung in headless/piped logs. Set to `0` to disable. On an attached terminal the spinner already conveys liveness, so the tick is off there. |
 | `NO_COLOR` | *(unset)* | Standard [no-color.org](https://no-color.org) convention — set to any value to drop ANSI color from the terminal output. The spinner and headers still render (uncolored). |
 | `FL_NO_SPINNER` | *(unset)* | Set to `1` to drop the spinner animation and the live in-place gate display, leaving just the `==>` section headers and plain result lines. Color is unaffected. The spinner also auto-disables off-TTY and when `TERM` is empty/`dumb` or `CI` is set (see [Terminal output](#terminal-output)). Forwarded into Docker runs when set on the host. |
 | `FL_ASCII` | *(unset)* | Set to `1` to use ASCII status marks (`[OK]`/`[XX]`) and ASCII spinner frames instead of the Unicode `✓`/`✗` + braille frames — for CJK "ambiguous-width" terminals or anywhere the single-cell glyphs misalign. |
@@ -33,8 +36,11 @@ logs, and for red-green color vision deficiency.
 
 When stdout is **not** a TTY (piped, headless, CI — including every Docker run that
 isn't attached), color and animation are no-ops: the output is plain `==>` headers
-and plain result lines with zero escape codes, so captured logs stay clean. Tune it
-with `NO_COLOR`, `FL_NO_SPINNER`, and `FL_ASCII` above.
+and plain result lines with zero escape codes, so captured logs stay clean. To keep a
+slow phase distinguishable from a hang there, long phases emit a plain
+`… still running (Nm)` heartbeat every `FL_HEARTBEAT_SECS` (default 60), and STATUS.md
+stamps each running phase with the time it started. Tune it with `NO_COLOR`,
+`FL_NO_SPINNER`, `FL_ASCII`, and `FL_HEARTBEAT_SECS` above.
 
 A bare TTY is necessary but not sufficient — a PTY can be a capture/relay (an IDE or
 agent terminal, a CR-preserving log capture) that doesn't collapse the spinner's

@@ -6,6 +6,31 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Per-phase wall-clock timeout for `bin/feature-loop`: every token-spending `claude -p`
+  call (build, the test/security gates, simplify, retrospective) is wrapped in GNU
+  `timeout`, configurable via `FL_PHASE_TIMEOUT` (default `1200`s). A throttled or wedged
+  call is killed at the limit instead of hanging the run indefinitely. A timed-out gate
+  has its failure file synthesized so the loop treats it as failed and retries (rather
+  than mis-reading "no failure file written" as a pass); a timed-out post-green
+  `/code-simplify` discards its partial edits and ships the already-green tip. Where
+  `timeout` is unavailable the calls run unbounded rather than failing. (#48)
+- Optional `FL_MAX_BUDGET_USD` config for `bin/feature-loop`: when set, it is passed as
+  `--max-budget-usd` to each `claude -p` phase call, bounding a runaway agentic loop by
+  cost as a complement to the wall-clock `FL_PHASE_TIMEOUT`. Opt-in (unset = no cap) so a
+  guessed default can't silently truncate a legitimate multi-step phase. (The originating
+  plan proposed `--max-turns`, but the pinned Claude CLI exposes only `--max-budget-usd`;
+  this implements the bound with the flag the CLI actually offers.) (#48)
+- Progress heartbeat for headless `bin/feature-loop` runs: off-TTY (piped/CI/Docker),
+  where the spinner is a no-op, long phases now emit a plain `… still running (Nm)` tick
+  every `FL_HEARTBEAT_SECS` (default 60), and STATUS.md stamps each running phase with
+  its start time. A slow-but-progressing phase is no longer indistinguishable from a
+  hung one — the ambiguity that prompted the original report. This also surfaces upstream
+  throttling: the elapsed-time tick makes a throttled phase visibly slow, and a timed-out
+  phase's log tail (captured in its failure file) shows whatever the CLI emitted. No 429
+  parsing is added because the CLI logs no structured rate-limit signal to key on. (#48)
+
 ## [0.4.2] — 2026-05-30
 
 ### Added

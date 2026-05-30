@@ -97,6 +97,18 @@ _FL_ARCHIVE_DIR_ENV="${FL_ARCHIVE_DIR-}"
 FL_ARCHIVE_DIR="${FL_ARCHIVE_DIR:-$HOME/.feature-loop}"
 # Set FL_RETROSPECTIVE=0 to skip the post-run Claude reflection (saves one API call).
 FL_RETROSPECTIVE="${FL_RETROSPECTIVE:-1}"
+# Per-phase wall-clock bound (seconds) for every token-spending `claude -p` call, so a
+# throttled or wedged phase can't hang the run indefinitely (ISSUE-48). Generous default.
+FL_PHASE_TIMEOUT="${FL_PHASE_TIMEOUT:-1200}"
+# Optional per-phase API-spend cap (USD) for each `claude -p` call, bounding a runaway
+# agentic loop by cost. Opt-in: empty means no cap, so a generous-but-guessed default
+# can't silently truncate a legitimate multi-step phase. The plan proposed `--max-turns`,
+# but the pinned CLI exposes only `--max-budget-usd`; this is the equivalent it offers.
+FL_MAX_BUDGET_USD="${FL_MAX_BUDGET_USD:-}"
+# Heartbeat interval (seconds) for the off-TTY "still running (Nm)" progress tick, so a
+# slow phase reads as progressing rather than hung in headless/piped logs (ISSUE-48). The
+# attached-TTY spinner already conveys this; 0 disables the tick.
+FL_HEARTBEAT_SECS="${FL_HEARTBEAT_SECS:-60}"
 # shellcheck disable=SC1091
 [ "$NO_CONFIG" -eq 0 ] && [ -f "$REPO_ROOT/.featureloop" ] && . "$REPO_ROOT/.featureloop"
 [ -n "$_FL_ARCHIVE_DIR_ENV" ] && FL_ARCHIVE_DIR="$_FL_ARCHIVE_DIR_ENV"
@@ -121,6 +133,13 @@ case "$GIT_COMMON_DIR" in /*) : ;; *) GIT_COMMON_DIR="$REPO_ROOT/$GIT_COMMON_DIR
 WT_DIR="${FL_WT_DIR:-$REPO_ROOT/.worktrees/$TICKET}"
 BRANCH="feature/${TICKET}-${SLUG}"
 FLAGS=(--dangerously-skip-permissions)
+
+# Prefix that bounds each `claude -p` phase by wall-clock. `timeout` (GNU coreutils) is
+# present in the Docker base and on CI; when it's missing (e.g. a bare host) the prefix
+# stays empty and calls run unbounded rather than failing. `-k 30` escalates to SIGKILL
+# 30s after the initial SIGTERM for a call that ignores TERM (cf. the #27 headless wedge).
+FL_TIMEOUT=()
+command -v timeout > /dev/null 2>&1 && FL_TIMEOUT=(timeout -k 30 "$FL_PHASE_TIMEOUT")
 
 # Run identity + timing — set before the EXIT trap so the archive captures everything,
 # even an unexpected early exit.
@@ -206,18 +225,53 @@ if [ "${FL_ASCII:-0}" = 1 ]; then
   FL_FRAMES=('|' '/' '-' '\\')
 fi
 
+# True while any of the given PIDs is still running.
+_any_alive() {
+  local p
+  for p in "$@"; do kill -0 "$p" 2> /dev/null && return 0; done
+  return 1
+}
+
+# Off-TTY progress: while any of the given PIDs is alive, print a plain "still running
+# (Nm)" line every FL_HEARTBEAT_SECS so a slow phase reads as progressing rather than hung
+# in headless/piped logs, where the spinner is a no-op (ISSUE-48). No escape codes — safe
+# for captured logs. Polls at 1s so it stops promptly once the watched work finishes.
+# _heartbeat <label> <pid...>
+_heartbeat() {
+  local label="$1" secs="$FL_HEARTBEAT_SECS" elapsed=0
+  shift
+  [ "$secs" -gt 0 ] || return 0
+  while _any_alive "$@"; do
+    sleep 1
+    elapsed=$((elapsed + 1))
+    [ $((elapsed % secs)) -eq 0 ] &&
+      printf '  %s — still running (%dm)\n' "$label" "$((elapsed / 60))"
+  done
+}
+
+# Stop a backgrounded _heartbeat once the work it watched has finished.
+_stop_heartbeat() {
+  kill "$1" 2> /dev/null || true
+  wait "$1" 2> /dev/null || true
+}
+
 # spin <msg> <log> -- <cmd...>
 # Run <cmd...> with its output redirected to <log>, resolving to a single ✓/✗ line.
 # Attached: animate the braille spinner next to <msg> at ~0.1s. Off-TTY (or under
-# FL_NO_SPINNER): print one ==> header and run inline — no escape codes reach the
-# log or stdout. spin's exit status is the command's.
+# FL_NO_SPINNER): print one ==> header, run in the background with a plain heartbeat
+# tick — no escape codes reach the log or stdout. spin's exit status is the command's.
 spin() {
   local msg="$1" log="$2" rc=0
   shift 2
   [ "${1:-}" = "--" ] && shift
   if [ "$FL_ANIMATE" -eq 0 ]; then
     hdr "$msg"
-    "$@" > "$log" 2>&1 || rc=$?
+    "$@" > "$log" 2>&1 &
+    local cmd_pid=$! hb_pid
+    _heartbeat "$msg" "$cmd_pid" &
+    hb_pid=$!
+    wait "$cmd_pid" || rc=$?
+    _stop_heartbeat "$hb_pid"
     return "$rc"
   fi
   "$@" > "$log" 2>&1 &
@@ -321,10 +375,44 @@ Open failures: ${open}
 _updated $(date '+%Y-%m-%d %H:%M:%S')_
 EOF
 }
+# One bounded headless `claude -p` phase call. Wrapped in FL_TIMEOUT so a throttled or
+# wedged call can't hang the run, and capped at FL_MAX_BUDGET_USD (when set) so a runaway
+# loop can't spend unbounded (ISSUE-48). <prompt> is passed last so the prompt stays the
+# final argument (test stubs read it as "${*: -1}").
+fl_claude() {
+  local budget=()
+  [ -n "$FL_MAX_BUDGET_USD" ] && budget=(--max-budget-usd "$FL_MAX_BUDGET_USD")
+  ${FL_TIMEOUT[@]+"${FL_TIMEOUT[@]}"} "$FL_CLAUDE" "${FLAGS[@]}" \
+    ${budget[@]+"${budget[@]}"} -p "$1"
+}
+
+# True when an exit status came from `timeout`: 124 (SIGTERM at the limit) or 137
+# (128+SIGKILL, the `-k` escalation).
+fl_timed_out() { [ "$1" -eq 124 ] || [ "$1" -eq 137 ]; }
+
+# A gate's verdict is "did the agent write its failure file?", but a timed-out call
+# never gets to write one — which would mis-read as a pass. Synthesize the failure file
+# on timeout so the loop treats the unfinished gate as failed and retries instead.
+fl_gate_timeout() {
+  local rc="$1" gate="$2" log="$3" ff
+  fl_timed_out "$rc" || return 0
+  ff="$(_gate_failfile "$gate")"
+  [ -f "$ff" ] && return 0
+  {
+    echo "# ${gate} gate timed out"
+    echo
+    echo "The \`claude -p\` ${gate} gate exceeded FL_PHASE_TIMEOUT (${FL_PHASE_TIMEOUT}s) and"
+    echo "was killed. Treating it as failed so the loop retries. Last lines of the phase log:"
+    echo
+    echo '```'
+    tail -n 40 "$log" 2> /dev/null
+    echo '```'
+  } > "$ff"
+}
+
 run_retrospective() {
   [ "$FL_RETROSPECTIVE" = "0" ] && return 0
-  "$FL_CLAUDE" "${FLAGS[@]}" -p "$FL_RETROSPECTIVE_PROMPT" \
-    > "tasks/logs/retrospective.log" 2>&1 || true
+  fl_claude "$FL_RETROSPECTIVE_PROMPT" > "tasks/logs/retrospective.log" 2>&1 || true
 }
 
 archive_run() {
@@ -422,21 +510,29 @@ ST_WT="ready"
 render_status
 
 run_build() {
-  ST_BUILD="running"
+  ST_BUILD="running (since $(date '+%H:%M:%S'))"
   render_status
   local note=""
   if ls tasks/failures/*.md > /dev/null 2>&1; then
     note=" The previous iteration's gates failed — read EVERY file in tasks/failures/ and fix the root cause of each."
   fi
   spin "Build (writer) — iteration ${ITER}" "tasks/logs/build-${ITER}.log" -- \
-    "$FL_CLAUDE" "${FLAGS[@]}" -p "${FL_BUILD_PROMPT}${note}" || true
+    fl_claude "${FL_BUILD_PROMPT}${note}" || true
   rm -f tasks/failures/*.md
   ST_BUILD="done (it.${ITER})"
   render_status
 }
 
-gate_test() { "$FL_CLAUDE" "${FLAGS[@]}" -p "$FL_TEST_PROMPT" > "tasks/logs/test-${ITER}.log" 2>&1 || true; }
-gate_security() { "$FL_CLAUDE" "${FLAGS[@]}" -p "$FL_SECURITY_PROMPT" > "tasks/logs/security-${ITER}.log" 2>&1 || true; }
+# Run one headless claude gate, capturing its log; on timeout fl_gate_timeout synthesizes
+# the failure file so the loop retries instead of mis-reading the unfinished gate as a pass.
+# _run_gate <name> <prompt>
+_run_gate() {
+  local gate="$1" log="tasks/logs/${1}-${ITER}.log" rc=0
+  fl_claude "$2" > "$log" 2>&1 || rc=$?
+  fl_gate_timeout "$rc" "$gate" "$log"
+}
+gate_test() { _run_gate test "$FL_TEST_PROMPT"; }
+gate_security() { _run_gate security "$FL_SECURITY_PROMPT"; }
 
 # Materialize the worktree (committed + tracked uncommitted changes) into a clean
 # checkout that carries git's recorded file modes. On macOS, Docker Desktop's bind
@@ -490,9 +586,11 @@ gate_pipeline() {
 }
 
 run_gates() {
-  ST_TEST="running"
-  ST_PIPE="running"
-  ST_SEC="running"
+  local now
+  now="$(date '+%H:%M:%S')"
+  ST_TEST="running (since $now)"
+  ST_PIPE="running (since $now)"
+  ST_SEC="running (since $now)"
   render_status
   gate_test &
   P1=$!
@@ -504,7 +602,10 @@ run_gates() {
     _gate_panel "$P1" "$P2" "$P3"
   else
     hdr "Gates — test · project · security"
+    _heartbeat "gates" "$P1" "$P2" "$P3" &
+    local hb_pid=$!
     wait "$P1" "$P2" "$P3" || true
+    _stop_heartbeat "$hb_pid"
     printf '    %-8s %s\n' test "$(_gate_result test)"
     printf '    %-8s %s\n' project "$(_gate_result project)"
     printf '    %-8s %s\n' security "$(_gate_result security)"
@@ -558,19 +659,20 @@ if [ "$GREEN" -ne 1 ]; then
   exit 1
 fi
 
-ST_SIMP="running"
+ST_SIMP="running (since $(date '+%H:%M:%S'))"
 render_status
-spin "Code simplify" "tasks/logs/simplify.log" -- \
-  "$FL_CLAUDE" "${FLAGS[@]}" -p "$FL_SIMPLIFY_PROMPT" || true
+simplify_rc=0
+spin "Code simplify" "tasks/logs/simplify.log" -- fl_claude "$FL_SIMPLIFY_PROMPT" || simplify_rc=$?
 
-if gates_in_clean_tree tasks/logs/gates-final.log; then
+if fl_timed_out "$simplify_rc"; then
+  # Simplify is optional post-green polish; a timeout must not sink an already-green
+  # tip. Drop its partial, uncommitted edits and ship the green commit (ISSUE-48).
+  git checkout -- . 2> /dev/null || true
+  ST_SIMP="skipped (timed out after ${FL_PHASE_TIMEOUT}s)"
+  warn "code-simplify timed out after ${FL_PHASE_TIMEOUT}s; shipping the green tip without it."
+elif gates_in_clean_tree tasks/logs/gates-final.log; then
   fl_commit_simplify
   ST_SIMP="done"
-  render_status
-  # Final summary in a green header (the one place a non-blue header is used).
-  printf '%s==>%s %s%s%s\n' "$C_GREEN" "$C_RESET" "$C_BOLD" \
-    "DONE: ${BRANCH} is green. Review tasks/STATUS.md, then push and open the PR when ready." "$C_RESET"
-  OUTCOME="green"
 else
   ST_SIMP="broke gates -> tasks/logs/gates-final.log"
   render_status
@@ -578,3 +680,8 @@ else
   OUTCOME="broke-simplify"
   exit 1
 fi
+render_status
+# Final summary in a green header (the one place a non-blue header is used).
+printf '%s==>%s %s%s%s\n' "$C_GREEN" "$C_RESET" "$C_BOLD" \
+  "DONE: ${BRANCH} is green. Review tasks/STATUS.md, then push and open the PR when ready." "$C_RESET"
+OUTCOME="green"

@@ -809,3 +809,209 @@ EOF
   [ "$rc" -ne 0 ]
   [ "$no_done" -eq 1 ]
 }
+
+# --- per-phase timeout: a throttled/wedged claude -p can't hang the run (ISSUE-48) ----
+
+@test "a gate whose claude call times out is marked failed, and the run doesn't hang" {
+  # A gate's verdict is "did the agent write its failure file?". A timed-out call never
+  # writes one, so without the guard it mis-reads as a pass. The engine must synthesize
+  # the failure file on timeout so the loop treats the gate as failed. The stub sleeps
+  # ONLY on the test-gate prompt, outlasting FL_PHASE_TIMEOUT=1; everything else is
+  # instant. The run must end bounded (not hang on the 10s sleep) and not-green.
+  command -v timeout > /dev/null 2>&1 || skip "timeout (GNU coreutils) not available"
+  tmp="$(mktemp -d)"
+  stub="$tmp/claude"
+  cat > "$stub" << 'EOF'
+#!/usr/bin/env bash
+# feature-loop invokes: claude --dangerously-skip-permissions -p <prompt>
+prompt="${*: -1}"
+case "$prompt" in
+  *test-driven-development*) sleep 10 ;; # the test gate — outlasts FL_PHASE_TIMEOUT
+esac
+exit 0
+EOF
+  chmod +x "$stub"
+
+  wt="$tmp/wt"
+  rc=0
+  (
+    cd "$tmp" || exit 1
+    git init --bare -q upstream.git
+    git init -q -b main work
+    cd work || exit 1
+    echo 'FL_GATES=true' > .featureloop
+    mkdir tasks
+    echo 'todo' > tasks/plan.md
+    echo x > README.md
+    git add -A
+    git -c user.email=t@t -c user.name=t commit -qm init
+    git remote add origin ../upstream.git
+    git push -q origin main
+    FL_CLAUDE="$stub" FL_MAX_ITERS=1 FL_PHASE_TIMEOUT=1 \
+      FL_ARCHIVE_DIR="$tmp/arc" FL_BASE_BRANCH=main FL_RETROSPECTIVE=0 FL_WT_DIR="$wt" \
+      "$FL" TKT slug
+  ) > /dev/null 2>&1 || rc=$? # not-green exits 1; capture it instead of aborting the test
+
+  # The synthesized failure file names the timeout, and the run ended not-green
+  # (exit 1) rather than hanging on the stub's 10s sleep.
+  timed_out_marked=0
+  grep -rqi "timed out" "$tmp/arc/runs"/TKT-*/failures/test.md 2> /dev/null && timed_out_marked=1
+
+  rm -rf "$tmp"
+  [ "$rc" -eq 1 ]
+  [ "$timed_out_marked" -eq 1 ]
+}
+
+@test "a code-simplify timeout ships the green tip instead of failing the run" {
+  # Simplify is optional post-green polish; a timeout there must not sink an
+  # already-green tip. The stub sleeps ONLY on the simplify prompt (outlasting
+  # FL_PHASE_TIMEOUT=1); the build + gates are instant and green. The run must end
+  # green with a clean worktree (any partial simplify edit discarded).
+  command -v timeout > /dev/null 2>&1 || skip "timeout (GNU coreutils) not available"
+  tmp="$(mktemp -d)"
+  stub="$tmp/claude"
+  cat > "$stub" << 'EOF'
+#!/usr/bin/env bash
+prompt="${*: -1}"
+case "$prompt" in
+  *code-simplification*) sleep 10 ;; # simplify — outlasts FL_PHASE_TIMEOUT
+esac
+exit 0
+EOF
+  chmod +x "$stub"
+
+  wt="$tmp/wt"
+  (
+    cd "$tmp" || exit 1
+    git init --bare -q upstream.git
+    git init -q -b main work
+    cd work || exit 1
+    echo 'FL_GATES=true' > .featureloop
+    mkdir tasks
+    echo 'todo' > tasks/plan.md
+    echo x > README.md
+    git add -A
+    git -c user.email=t@t -c user.name=t commit -qm init
+    git remote add origin ../upstream.git
+    git push -q origin main
+    FL_CLAUDE="$stub" FL_MAX_ITERS=1 FL_PHASE_TIMEOUT=1 \
+      FL_ARCHIVE_DIR="$tmp/arc" FL_BASE_BRANCH=main FL_RETROSPECTIVE=0 FL_WT_DIR="$wt" \
+      "$FL" TKT slug
+  ) > /dev/null 2>&1
+  rc=$?
+
+  green=0
+  grep -q '"outcome": *"green"' "$tmp/arc/runs"/TKT-*/summary.json 2> /dev/null && green=1
+  clean=0
+  [ -z "$(git -C "$wt" status --porcelain --untracked-files=no)" ] && clean=1
+
+  rm -rf "$tmp"
+  [ "$rc" -eq 0 ]
+  [ "$green" -eq 1 ]
+  [ "$clean" -eq 1 ]
+}
+
+# --- optional API-spend cap: --max-budget-usd is opt-in (ISSUE-48) -------------------
+
+# Run a full green loop with a claude stub that appends its argv (one arg per line) to
+# $1, then echo whether `--max-budget-usd` was passed. $2 is extra env for the engine.
+_engine_claude_argv() { # $1=argv-log  $2=extra-env -> stdout: "yes"/"no"
+  local argslog="$1" extra="$2" d
+  d="$(mktemp -d)"
+  cat > "$d/claude" << EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$argslog"
+exit 0
+EOF
+  chmod +x "$d/claude"
+  (
+    cd "$d" || exit 1
+    git init --bare -q up.git
+    git init -q -b main work
+    cd work || exit 1
+    echo 'FL_GATES=true' > .featureloop
+    mkdir tasks
+    echo todo > tasks/plan.md
+    echo x > README.md
+    git add -A
+    git -c user.email=t@t -c user.name=t commit -qm init
+    git remote add origin ../up.git
+    git push -q origin main
+    eval "export $extra"
+    FL_CLAUDE="$d/claude" FL_MAX_ITERS=1 FL_ARCHIVE_DIR="$d/arc" \
+      FL_BASE_BRANCH=main FL_RETROSPECTIVE=0 FL_WT_DIR="$d/wt" \
+      "$FL" TKT slug
+  ) > /dev/null 2>&1
+  if grep -qFx -- '--max-budget-usd' "$argslog"; then echo yes; else echo no; fi
+  rm -rf "$d"
+}
+
+@test "FL_MAX_BUDGET_USD passes --max-budget-usd to the claude phase calls when set" {
+  log="$(mktemp)"
+  result="$(_engine_claude_argv "$log" 'FL_MAX_BUDGET_USD=5')"
+  passed_value=0
+  grep -qFx '5' "$log" && passed_value=1
+  rm -f "$log"
+  [ "$result" = yes ]
+  [ "$passed_value" -eq 1 ]
+}
+
+@test "the claude phase calls omit --max-budget-usd when FL_MAX_BUDGET_USD is unset" {
+  # Opt-in: a bogus flag must never be passed by default (the pinned CLI would error).
+  log="$(mktemp)"
+  result="$(_engine_claude_argv "$log" 'PATH=$PATH')"
+  rm -f "$log"
+  [ "$result" = no ]
+}
+
+# --- progress heartbeat: slow ≠ silent in headless logs (ISSUE-48) ------------------
+
+@test "a slow phase emits a plain heartbeat tick off-TTY" {
+  # Off-TTY the spinner is a no-op, so a long phase looked identical to a hang. The
+  # heartbeat must emit a "still running" line (and stay plain — no CR/ESC). The stub
+  # sleeps only on the build prompt, outlasting FL_HEARTBEAT_SECS=1; bats runs off-TTY.
+  tmp="$(mktemp -d)"
+  stub="$tmp/claude"
+  cat > "$stub" << 'EOF'
+#!/usr/bin/env bash
+prompt="${*: -1}"
+case "$prompt" in
+  *incremental-implementation*) sleep 2 ;; # the build (writer) phase
+esac
+exit 0
+EOF
+  chmod +x "$stub"
+
+  out="$tmp/out.txt"
+  wt="$tmp/wt"
+  (
+    cd "$tmp" || exit 1
+    git init --bare -q upstream.git
+    git init -q -b main work
+    cd work || exit 1
+    echo 'FL_GATES=true' > .featureloop
+    mkdir tasks
+    echo 'todo' > tasks/plan.md
+    echo x > README.md
+    git add -A
+    git -c user.email=t@t -c user.name=t commit -qm init
+    git remote add origin ../upstream.git
+    git push -q origin main
+    FL_CLAUDE="$stub" FL_MAX_ITERS=1 FL_HEARTBEAT_SECS=1 \
+      FL_ARCHIVE_DIR="$tmp/arc" FL_BASE_BRANCH=main FL_RETROSPECTIVE=0 FL_WT_DIR="$wt" \
+      "$FL" TKT slug
+  ) > "$out" 2>&1
+  rc=$?
+
+  ticked=0
+  grep -qF 'still running' "$out" && ticked=1
+  # The tick must stay plain — no CR or ESC in the captured stream.
+  plain=1
+  grep -q "$(printf '\r')" "$out" && plain=0
+  grep -q "$(printf '\033')" "$out" && plain=0
+
+  rm -rf "$tmp"
+  [ "$rc" -eq 0 ]
+  [ "$ticked" -eq 1 ]
+  [ "$plain" -eq 1 ]
+}
