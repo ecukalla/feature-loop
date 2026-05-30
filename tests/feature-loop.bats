@@ -1096,3 +1096,255 @@ EOF
   [ "$rc" -eq 0 ]
   [ "$no_flag" -eq 1 ]
 }
+
+# --- --dry-run / --hermetic: run the whole loop with zero Claude calls (ISSUE-15) -----
+
+@test "feature-loop --help documents --dry-run and --hermetic" {
+  run "$FL" --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--dry-run"* ]]
+  [[ "$output" == *"--hermetic"* ]]
+}
+
+@test "feature-loop --hermetic without --dry-run errors" {
+  # --hermetic only stubs FL_GATES on top of a dry-run; on its own it is meaningless,
+  # so it must error rather than silently doing nothing (or implying --dry-run).
+  run "$FL" --hermetic TKT slug
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--hermetic requires --dry-run"* ]]
+}
+
+@test "feature-loop --dry-run runs the whole loop without ever invoking claude" {
+  # The flag forces the FL_CLAUDE=true no-op seam AFTER config sourcing, so NO env
+  # FL_CLAUDE is set here: a canary `claude` on PATH proves the flag (not the env) is
+  # what suppresses every token-spending call. If the seam regressed, the canary would
+  # run and leave its marker, and this fails loudly.
+  tmp="$(mktemp -d)"
+  stub="$(mktemp -d)"
+  cat > "$stub/claude" << EOF
+#!/usr/bin/env bash
+echo CALLED >> "$tmp/claude.calls"
+exit 0
+EOF
+  chmod +x "$stub/claude"
+
+  (
+    cd "$tmp" || exit 1
+    git init --bare -q upstream.git
+    git init -q -b main work
+    cd work || exit 1
+    echo 'FL_GATES=true' > .featureloop
+    mkdir tasks
+    echo 'todo' > tasks/plan.md
+    echo x > README.md
+    git add -A
+    git -c user.email=t@t -c user.name=t commit -qm init
+    git remote add origin ../upstream.git
+    git push -q origin main
+    PATH="$stub:$PATH" FL_MAX_ITERS=1 FL_ARCHIVE_DIR="$tmp/arc" \
+      FL_BASE_BRANCH=main FL_WT_DIR="$tmp/wt" \
+      "$FL" --dry-run TKT slug
+  ) > /dev/null 2>&1
+  rc=$?
+
+  never_called=0
+  [ ! -f "$tmp/claude.calls" ] && never_called=1
+  green=0
+  grep -q '"outcome":        "green"' "$tmp/arc/runs"/TKT-*/summary.json 2> /dev/null && green=1
+
+  rm -rf "$tmp" "$stub"
+  [ "$rc" -eq 0 ]
+  [ "$never_called" -eq 1 ]
+  [ "$green" -eq 1 ]
+}
+
+@test "feature-loop --dry-run honours real gates; --hermetic stubs them green" {
+  # Plain --dry-run runs the REAL FL_GATES (only Claude is stubbed), so a failing gate
+  # (`exit 7`) keeps the run non-green. --hermetic additionally stubs FL_GATES=true, so
+  # the same repo reaches green — proving the two flags are distinct.
+  _run_gate7() { # $1=extra-flags -> sets global rc (non-green is expected, so capture
+    # the status with `|| rc=$?` rather than `rc=$?` on its own line — a bare failing
+    # subshell trips bats's per-command failure check before the capture runs).
+    local d
+    d="$(mktemp -d)"
+    rc=0
+    (
+      cd "$d" || exit 1
+      git init --bare -q upstream.git
+      git init -q -b main work
+      cd work || exit 1
+      echo "FL_GATES='exit 7'" > .featureloop
+      mkdir tasks
+      echo 'todo' > tasks/plan.md
+      echo x > README.md
+      git add -A
+      git -c user.email=t@t -c user.name=t commit -qm init
+      git remote add origin ../upstream.git
+      git push -q origin main
+      FL_CLAUDE=true FL_MAX_ITERS=1 FL_ARCHIVE_DIR="$d/arc" FL_BASE_BRANCH=main \
+        FL_RETROSPECTIVE=0 FL_WT_DIR="$d/wt" \
+        "$FL" $1 TKT slug
+    ) > /dev/null 2>&1 || rc=$?
+    rm -rf "$d"
+  }
+
+  _run_gate7 "--dry-run"
+  plain_rc="$rc"
+  _run_gate7 "--dry-run --hermetic"
+  herm_rc="$rc"
+
+  [ "$plain_rc" -ne 0 ] # real gate `exit 7` fails -> not green
+  [ "$herm_rc" -eq 0 ]  # hermetic stubs the gate -> green
+}
+
+@test "feature-loop tags summary.json dry_run by flag and by FL_DRY_RUN env" {
+  # The tag must be conditional: true under --dry-run or FL_DRY_RUN=1, false otherwise.
+  _dry_run_field() { # $1=flags $2=env-assignment -> echoes the dry_run JSON value
+    local d
+    d="$(mktemp -d)"
+    (
+      cd "$d" || exit 1
+      git init --bare -q upstream.git
+      git init -q -b main work
+      cd work || exit 1
+      echo 'FL_GATES=true' > .featureloop
+      mkdir tasks
+      echo 'todo' > tasks/plan.md
+      echo x > README.md
+      git add -A
+      git -c user.email=t@t -c user.name=t commit -qm init
+      git remote add origin ../upstream.git
+      git push -q origin main
+      env $2 FL_CLAUDE=true FL_MAX_ITERS=1 FL_ARCHIVE_DIR="$d/arc" \
+        FL_BASE_BRANCH=main FL_RETROSPECTIVE=0 FL_WT_DIR="$d/wt" \
+        "$FL" $1 TKT slug
+    ) > /dev/null 2>&1
+    grep -o '"dry_run":[^,]*' "$d/arc/runs"/TKT-*/summary.json | tr -d ' '
+    rm -rf "$d"
+  }
+
+  [ "$(_dry_run_field '' '')" = '"dry_run":false' ]
+  [ "$(_dry_run_field '--dry-run' '')" = '"dry_run":true' ]
+  [ "$(_dry_run_field '' 'FL_DRY_RUN=1')" = '"dry_run":true' ]
+}
+
+@test "feature-loop --dry-run cannot be re-armed by .featureloop (DRY_RUN clobber, ISSUE-15)" {
+  # The dry-run decision is taken from the CLI/env only and snapshot-restored across
+  # config sourcing, so a repo's .featureloop setting DRY_RUN=0 (or HERMETIC=1) must NOT
+  # re-enable real Claude calls. .featureloop is sourced in the engine's own shell, so
+  # before the fix those lines clobbered the user's --dry-run and the canary `claude` on
+  # PATH ran 5 times; after it, the canary is never invoked and the run stays tagged.
+  tmp="$(mktemp -d)"
+  stub="$(mktemp -d)"
+  cat > "$stub/claude" << EOF
+#!/usr/bin/env bash
+echo CALLED >> "$tmp/claude.calls"
+exit 0
+EOF
+  chmod +x "$stub/claude"
+
+  (
+    cd "$tmp" || exit 1
+    git init --bare -q upstream.git
+    git init -q -b main work
+    cd work || exit 1
+    printf 'FL_GATES=true\nDRY_RUN=0\nHERMETIC=1\n' > .featureloop
+    mkdir tasks
+    echo 'todo' > tasks/plan.md
+    echo x > README.md
+    git add -A
+    git -c user.email=t@t -c user.name=t commit -qm init
+    git remote add origin ../upstream.git
+    git push -q origin main
+    PATH="$stub:$PATH" FL_MAX_ITERS=1 FL_ARCHIVE_DIR="$tmp/arc" \
+      FL_BASE_BRANCH=main FL_RETROSPECTIVE=0 FL_WT_DIR="$tmp/wt" \
+      "$FL" --dry-run TKT slug
+  ) > /dev/null 2>&1
+  rc=$?
+
+  never_called=0
+  [ ! -f "$tmp/claude.calls" ] && never_called=1
+  dry_tagged=0
+  grep -q '"dry_run":        true' "$tmp/arc/runs"/TKT-*/summary.json 2> /dev/null && dry_tagged=1
+
+  rm -rf "$tmp" "$stub"
+  [ "$rc" -eq 0 ]
+  [ "$never_called" -eq 1 ]
+  [ "$dry_tagged" -eq 1 ]
+}
+
+# --- dry-run (dry-run) markers in the rendered archive artefacts (ISSUE-15, Task 2) ---
+#
+# summary.json's dry_run boolean is covered above; these guard the three human-readable
+# markers the plan also enumerates — STATUS.md title, summary.md Outcome, INDEX.md cell —
+# plus the INDEX "column count unchanged" invariant. Each is implemented but was
+# otherwise unasserted, so a future edit could drop or malform one (e.g. shift the INDEX
+# table) with the suite still green.
+
+# Build a one-commit repo under $1 and run feature-loop with flags $2 (FL_GATES=$3);
+# artefacts land in $1/arc (archive) and $1/wt (worktree). FL_CLAUDE=true so the loop
+# is a no-op writer regardless of the flags under test.
+_dry_run_archive() {
+  local d="$1" flags="$2" gates="$3"
+  (
+    cd "$d" || exit 1
+    git init --bare -q upstream.git
+    git init -q -b main work
+    cd work || exit 1
+    echo "FL_GATES=$gates" > .featureloop
+    mkdir tasks
+    echo 'todo' > tasks/plan.md
+    echo x > README.md
+    git add -A
+    git -c user.email=t@t -c user.name=t commit -qm init
+    git remote add origin ../upstream.git
+    git push -q origin main
+    FL_CLAUDE=true FL_MAX_ITERS=1 FL_ARCHIVE_DIR="$d/arc" \
+      FL_BASE_BRANCH=main FL_RETROSPECTIVE=0 FL_WT_DIR="$d/wt" \
+      "$FL" $flags TKT slug
+  ) > /dev/null 2>&1
+}
+
+@test "feature-loop --dry-run marks the STATUS.md title; a normal run does not" {
+  tmp="$(mktemp -d)"
+  _dry_run_archive "$tmp" "--dry-run" "true"
+  dry_status="$(cat "$tmp/arc/runs"/TKT-*/STATUS.md 2> /dev/null)"
+  rm -rf "$tmp"
+
+  tmp="$(mktemp -d)"
+  _dry_run_archive "$tmp" "" "true"
+  plain_status="$(cat "$tmp/arc/runs"/TKT-*/STATUS.md 2> /dev/null)"
+  rm -rf "$tmp"
+
+  [[ "$dry_status" == *"feature-loop (dry-run)"* ]]
+  [[ "$plain_status" != *"(dry-run)"* ]]
+}
+
+@test "feature-loop --hermetic marks the summary.md Outcome line; a normal run does not" {
+  # --hermetic so a no-gate repo reaches green and the Outcome is **green** (dry-run).
+  tmp="$(mktemp -d)"
+  _dry_run_archive "$tmp" "--dry-run --hermetic" "true"
+  dry_outcome="$(grep '^- Outcome:' "$tmp/arc/runs"/TKT-*/summary.md 2> /dev/null)"
+  rm -rf "$tmp"
+
+  tmp="$(mktemp -d)"
+  _dry_run_archive "$tmp" "" "true"
+  plain_outcome="$(grep '^- Outcome:' "$tmp/arc/runs"/TKT-*/summary.md 2> /dev/null)"
+  rm -rf "$tmp"
+
+  [[ "$dry_outcome" == *"**green** (dry-run)"* ]]
+  [[ "$plain_outcome" != *"(dry-run)"* ]]
+}
+
+@test "feature-loop --dry-run marks the INDEX.md outcome cell without shifting columns" {
+  tmp="$(mktemp -d)"
+  _dry_run_archive "$tmp" "--dry-run" "true"
+  row="$(grep '^| TKT-' "$tmp/arc/INDEX.md" 2> /dev/null)"
+  ncols="$(printf '%s\n' "$row" | awk -F'|' '{print NF}')"
+  rm -rf "$tmp"
+
+  [[ "$row" == *"green (dry-run)"* ]]
+  # `| a | b | c | d | e |` is 5 columns = 7 awk fields (leading + trailing empties).
+  # The marker lives inside a cell, so it must not add or shift a pipe.
+  [ "$ncols" -eq 7 ]
+}

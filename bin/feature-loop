@@ -38,10 +38,23 @@ for project config (gate command, base branch, prompts). Run /spec and /plan fir
 Options:
   -h, --help     show this help and exit
   -V, --version  print version and exit
+  --dry-run      exercise the full loop with no Claude calls (zero tokens)
+  --hermetic     dry-run with FL_GATES stubbed to a no-op (requires --dry-run)
 EOF
 }
 
 NO_CONFIG=0
+# --dry-run / --hermetic (or FL_DRY_RUN=1) productize the FL_CLAUDE=true no-op seam
+# the bats suite already relies on: run the whole loop with zero Claude calls. The
+# decision is taken here from the CLI flags / FL_DRY_RUN env ONLY, then snapshot-and-
+# restored across config sourcing (below) and the FL_CLAUDE override happens AFTER
+# sourcing — so neither the DRY_RUN gate nor the forced FL_CLAUDE can be clobbered by a
+# repo's .featureloop (a `DRY_RUN=0` line there must not re-arm real Claude calls on the
+# cautious `--dry-run` preview path). --hermetic additionally stubs FL_GATES and means
+# nothing on its own — it modifies dry-run, so it errors without it.
+DRY_RUN=0
+HERMETIC=0
+[ "${FL_DRY_RUN:-0}" = 1 ] && DRY_RUN=1
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -57,6 +70,14 @@ while [ $# -gt 0 ]; do
       NO_CONFIG=1
       shift
       ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    --hermetic)
+      HERMETIC=1
+      shift
+      ;;
     -*)
       echo "Unknown option: $1" >&2
       usage
@@ -69,6 +90,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 set -- ${ARGS[@]+"${ARGS[@]}"}
+
+# --hermetic stubs FL_GATES on top of dry-run; on its own it is meaningless.
+[ "$HERMETIC" -eq 0 ] || [ "$DRY_RUN" -eq 1 ] || die "--hermetic requires --dry-run"
 
 TICKET="${1:-}"
 SLUG="${2:-}"
@@ -113,9 +137,30 @@ FL_HEARTBEAT_SECS="${FL_HEARTBEAT_SECS:-60}"
 # "Generated with Claude Code" trailer so the loop's commits follow a no-AI-
 # attribution convention; 1 restores Claude Code's default attribution.
 FL_COMMIT_ATTRIBUTION="${FL_COMMIT_ATTRIBUTION:-0}"
+# Snapshot the CLI/env dry-run decision before sourcing and restore it after (the same
+# way FL_ARCHIVE_DIR is pinned) so a repo's `DRY_RUN=0` / `HERMETIC=1` line can't re-arm
+# real Claude calls — see the header note.
+_DRY_RUN_DECIDED="$DRY_RUN"
+_HERMETIC_DECIDED="$HERMETIC"
 # shellcheck disable=SC1091
 [ "$NO_CONFIG" -eq 0 ] && [ -f "$REPO_ROOT/.featureloop" ] && . "$REPO_ROOT/.featureloop"
 [ -n "$_FL_ARCHIVE_DIR_ENV" ] && FL_ARCHIVE_DIR="$_FL_ARCHIVE_DIR_ENV"
+DRY_RUN="$_DRY_RUN_DECIDED"
+HERMETIC="$_HERMETIC_DECIDED"
+
+# Apply the dry-run effects AFTER sourcing (see the header note): FL_CLAUDE=true turns
+# every `claude` call into a no-op, and --hermetic also stubs FL_GATES so the loop
+# reaches green with no project gate. Both are set before the FL_GATES-empty check
+# below, so hermetic satisfies it.
+if [ "$DRY_RUN" -eq 1 ]; then
+  FL_CLAUDE=true
+  banner="feature-loop: dry-run — exercising the loop with zero Claude calls (no tokens)"
+  if [ "$HERMETIC" -eq 1 ]; then
+    FL_GATES=true
+    banner="$banner; gates stubbed (hermetic)"
+  fi
+  echo "$banner" >&2
+fi
 
 [ -n "$FL_GATES" ] || {
   echo "ERROR: FL_GATES is empty. Create $REPO_ROOT/.featureloop (see docs/featureloop-config.md)." >&2
@@ -364,13 +409,14 @@ _gate_panel() {
 }
 
 render_status() {
-  local open="none" f
+  local open="none" f dry=""
+  [ "$DRY_RUN" -eq 1 ] && dry=" (dry-run)"
   if ls tasks/failures/*.md > /dev/null 2>&1; then
     open=""
     for f in tasks/failures/*.md; do open="${open}$(basename "$f") "; done
   fi
   cat > tasks/STATUS.md << EOF
-# ${TICKET} — feature-loop        iteration ${ITER} / ${FL_MAX_ITERS}
+# ${TICKET} — feature-loop${dry}        iteration ${ITER} / ${FL_MAX_ITERS}
 
 - branch:   \`${BRANCH}\`
 - worktree: \`${WT_DIR}\`
@@ -431,7 +477,11 @@ run_retrospective() {
 
 archive_run() {
   local outcome="${1:-unknown}"
-  local end_epoch duration arc_dir idx
+  local end_epoch duration arc_dir idx dry_json=false dry_label=""
+  if [ "$DRY_RUN" -eq 1 ]; then
+    dry_json=true
+    dry_label=" (dry-run)"
+  fi
   end_epoch="$(date +%s)"
   duration=$((end_epoch - RUN_START_EPOCH))
   arc_dir="$FL_ARCHIVE_DIR/runs/$RUN_ID"
@@ -455,6 +505,7 @@ archive_run() {
   "branch":         "$BRANCH",
   "base_branch":    "$FL_BASE_BRANCH",
   "outcome":        "$outcome",
+  "dry_run":        $dry_json,
   "iterations":     $ITER,
   "max_iterations": $FL_MAX_ITERS,
   "duration_sec":   $duration,
@@ -471,7 +522,7 @@ EOF
     echo "- Slug:        \`$SLUG\`"
     echo "- Branch:      \`$BRANCH\`"
     echo "- Base branch: \`$FL_BASE_BRANCH\`"
-    echo "- Outcome:     **$outcome**"
+    echo "- Outcome:     **$outcome**$dry_label"
     echo "- Iterations:  $ITER / $FL_MAX_ITERS"
     echo "- Duration:    ${duration}s"
     echo "- Started:     $RUN_STARTED_AT"
@@ -491,7 +542,7 @@ EOF
     } > "$idx"
   fi
   printf "| %s | %s | %s/%s | %ss | %s |\n" \
-    "$RUN_ID" "$outcome" "$ITER" "$FL_MAX_ITERS" "$duration" "$BRANCH" >> "$idx"
+    "$RUN_ID" "$outcome$dry_label" "$ITER" "$FL_MAX_ITERS" "$duration" "$BRANCH" >> "$idx"
 }
 
 on_exit() {
