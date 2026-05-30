@@ -407,10 +407,19 @@ EOF
   # branch (bin/feature-loop:194) untested. An exported-empty TERM is the only thing
   # that reaches it, so dropping that branch makes this case re-flood and fail.
   empty_cr="$(_bare_cr_under_pty 'unset CI; export TERM=')"
+  # Symmetric positive guard (the fix's headline promise and the plan's named top
+  # risk, plan.md:53,69): a genuine attached terminal — real TERM, CI unset — must
+  # STILL animate. Every suppression case above stays green under an over-aggressive
+  # gate (unconditional FL_ANIMATE=0, an inverted condition, a `[ -n "$TERM" ]` typo);
+  # only this case catches a gate that silently drops #40's live status. Verified
+  # non-vacuous in both directions: 12 bare CR against the current engine, 0 if the
+  # gate is made unconditional.
+  live_cr="$(_bare_cr_under_pty 'unset CI; export TERM=xterm-256color')"
 
   [ "$ci_cr" -eq 0 ]
   [ "$dumb_cr" -eq 0 ]
   [ "$empty_cr" -eq 0 ]
+  [ "$live_cr" -gt 0 ]
 }
 
 # --- --auth oauth uses an unpredictable tempfile path (symlink defense) --------------
