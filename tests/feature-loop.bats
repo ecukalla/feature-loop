@@ -348,7 +348,7 @@ EOF
   [ "$term_fwd" -eq 1 ]
 }
 
-@test "feature-loop engine suppresses the spinner on a PTY under CI or TERM=dumb (ISSUE-43)" {
+@test "feature-loop engine suppresses the spinner on a PTY under CI, TERM=dumb, or empty TERM (ISSUE-43)" {
   # The core regression guard. Run the engine on a real PTY (so `[ -t 1 ]` holds and
   # FL_TTY=1) but with CI=1 / TERM=dumb — the relay/headless signal. The spinner must
   # stand down: zero "bare" carriage returns (a CR not part of a \r\n line ending) in
@@ -401,9 +401,16 @@ EOF
 
   ci_cr="$(_bare_cr_under_pty 'export CI=1 TERM=xterm-256color')"
   dumb_cr="$(_bare_cr_under_pty 'export TERM=dumb')"
+  # Issue headline case (plan.md Gap #2): a PTY with an empty TERM. TERM must be
+  # EXPORTED empty, not `unset` — bash re-defaults an unset TERM to `dumb` at startup,
+  # which would silently land in the dumb branch above and leave the `-z TERM` gate
+  # branch (bin/feature-loop:194) untested. An exported-empty TERM is the only thing
+  # that reaches it, so dropping that branch makes this case re-flood and fail.
+  empty_cr="$(_bare_cr_under_pty 'unset CI; export TERM=')"
 
   [ "$ci_cr" -eq 0 ]
   [ "$dumb_cr" -eq 0 ]
+  [ "$empty_cr" -eq 0 ]
 }
 
 # --- --auth oauth uses an unpredictable tempfile path (symlink defense) --------------
