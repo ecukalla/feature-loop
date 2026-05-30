@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-05-30
+
+### Fixed
+
+- A green `feature-loop` run no longer leaves the post-green `/code-simplify` cleanup as
+  uncommitted changes in the run's worktree. The engine now commits the simplify diff
+  after the final gate passes, so the branch tip you push is the simplified tree.
+  Previously the run reported green on changes that lived only in the working tree, and
+  pushing the tip silently dropped them. (#41)
+
 ## [0.4.0] — 2026-05-29
 
 ### Added
@@ -203,7 +213,9 @@ Initial release.
 - `.editorconfig`, `.gitattributes`, `.shellcheckrc`, `.markdownlint.yaml`.
 - GitHub issue forms, PR template, `CODEOWNERS`.
 
-[Unreleased]: https://github.com/ecukalla/feature-loop/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/ecukalla/feature-loop/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/ecukalla/feature-loop/releases/tag/v0.4.1
+[0.4.0]: https://github.com/ecukalla/feature-loop/releases/tag/v0.4.0
 [0.3.0]: https://github.com/ecukalla/feature-loop/releases/tag/v0.3.0
 [0.2.0]: https://github.com/ecukalla/feature-loop/releases/tag/v0.2.0
 [0.1.5]: https://github.com/ecukalla/feature-loop/releases/tag/v0.1.5
