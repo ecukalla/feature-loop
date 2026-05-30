@@ -5,6 +5,11 @@ FL_BASE_BRANCH=dev
 FL_MAX_ITERS=5
 FL_PLAN_FILE=tasks/plan.md
 
+# Commit/PR attribution. The loop suppresses the "Co-Authored-By: Claude" /
+# "Generated with Claude Code" trailer by default (0) so commits follow a
+# no-AI-attribution convention. Set to 1 to restore Claude Code's default trailer.
+# FL_COMMIT_ATTRIBUTION=1
+
 # Authoritative gate — your local mirror of CI. Runs in the worktree; first failing
 # command stops the chain.
 FL_GATES='make test \
