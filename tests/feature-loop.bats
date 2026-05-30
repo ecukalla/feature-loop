@@ -11,6 +11,17 @@ setup() {
   LINT="$REPO_ROOT/scripts/lint-plugin-manifests.sh"
 }
 
+# Stub `docker` in PATH dir $1 to append its args (one per line) to $2/docker.log,
+# so tests can assert which `-e VAR` flags the runner forwarded.
+_stub_docker_logging_args() {
+  cat > "$1/docker" << EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$2/docker.log"
+exit 0
+EOF
+  chmod +x "$1/docker"
+}
+
 @test "feature-loop --version prints a version" {
   run "$FL" --version
   [ "$status" -eq 0 ]
@@ -254,12 +265,7 @@ setup() {
   # but TERM must NOT be — without a PTY there is no real terminal type to forward.
   tmp="$(mktemp -d)"
   stub="$(mktemp -d)"
-  cat > "$stub/docker" << EOF
-#!/usr/bin/env bash
-printf '%s\n' "\$@" >> "$tmp/docker.log"
-exit 0
-EOF
-  chmod +x "$stub/docker"
+  _stub_docker_logging_args "$stub" "$tmp"
 
   (
     cd "$tmp" || exit 1
@@ -287,12 +293,7 @@ EOF
   # (which would clear it inside the container, or worse leak the host's empty value).
   tmp="$(mktemp -d)"
   stub="$(mktemp -d)"
-  cat > "$stub/docker" << EOF
-#!/usr/bin/env bash
-printf '%s\n' "\$@" >> "$tmp/docker.log"
-exit 0
-EOF
-  chmod +x "$stub/docker"
+  _stub_docker_logging_args "$stub" "$tmp"
 
   (
     cd "$tmp" || exit 1
@@ -319,12 +320,7 @@ EOF
 
   tmp="$(mktemp -d)"
   stub="$(mktemp -d)"
-  cat > "$stub/docker" << EOF
-#!/usr/bin/env bash
-printf '%s\n' "\$@" >> "$tmp/docker.log"
-exit 0
-EOF
-  chmod +x "$stub/docker"
+  _stub_docker_logging_args "$stub" "$tmp"
 
   cat > "$tmp/runner.sh" << EOF
 #!/usr/bin/env bash
