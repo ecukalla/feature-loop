@@ -5,6 +5,9 @@ feature-loop's engine runs **every phase as `claude -p`** — Claude Code's head
 (`bin/feature-loop:186,271,277,278,370`). How those runs are billed depends on the auth
 mode you pick when you launch `feature-loop-docker`.
 
+Interrupting a run with Ctrl-C (or `SIGTERM`) still archives the run, but **skips** the
+retrospective so an abort never costs you a final billable call.
+
 ## The two auth modes
 
 | Mode | How you select it | Billed as |

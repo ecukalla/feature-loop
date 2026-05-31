@@ -206,6 +206,9 @@ RUN_ID="${TICKET}-$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_START_EPOCH="$(date +%s)"
 RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 OUTCOME="unknown"
+# Set by the INT/TERM traps so the EXIT trap can tell a user abort (Ctrl-C / kill) from
+# a normal finish and skip the billable retrospective call on an interrupt (ISSUE-58).
+INTERRUPTED=0
 
 # Never let the worktree dir or runtime artifacts get committed (shared across worktrees).
 EXCLUDE="$GIT_COMMON_DIR/info/exclude"
@@ -482,6 +485,14 @@ fl_gate_crash() {
 
 run_retrospective() {
   [ "$FL_RETROSPECTIVE" = "0" ] && return 0
+  # The retrospective is a billable `claude -p` call, and a Ctrl-C / kill routes through
+  # the EXIT trap just like a normal finish. A user who interrupts a run is stopping it to
+  # stop spending — don't charge them for a reflection on the way out (ISSUE-58).
+  if [ "$INTERRUPTED" -eq 1 ]; then
+    echo "skipped: run interrupted — no billable retrospective" \
+      > "tasks/logs/retrospective.log" 2> /dev/null || true
+    return 0
+  fi
   fl_claude "$FL_RETROSPECTIVE_PROMPT" > "tasks/logs/retrospective.log" 2>&1 || true
 }
 
@@ -578,9 +589,10 @@ on_exit() {
 }
 trap on_exit EXIT
 # Route INT/TERM through a normal exit so the EXIT trap restores the cursor and
-# archives the run before the interrupted process dies.
-trap 'exit 130' INT
-trap 'exit 143' TERM
+# archives the run before the interrupted process dies. INTERRUPTED tells on_exit this was
+# an abort, so it skips the billable retrospective (ISSUE-58) — the archive still runs.
+trap 'INTERRUPTED=1; exit 130' INT
+trap 'INTERRUPTED=1; exit 143' TERM
 ST_WT="ready"
 render_status
 

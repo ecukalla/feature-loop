@@ -1398,3 +1398,117 @@ _dry_run_archive() {
   # The marker lives inside a cell, so it must not add or shift a pipe.
   [ "$ncols" -eq 7 ]
 }
+
+# --- regression: Ctrl-C / SIGINT must not fire the billable retrospective (ISSUE-58) --
+
+@test "an interrupted run (SIGINT) skips the billable retrospective" {
+  # Ctrl-C routes through the EXIT trap so the run still archives — but the retrospective
+  # is a billable `claude -p` call, and interrupting a run to STOP it must not spend
+  # tokens on a reflection. The stub records every prompt it is handed; the build call
+  # blocks (so the engine is mid-run, parked in its phase `wait`, when the signal lands)
+  # while the retrospective prompt — if it were ever issued — returns at once and leaves
+  # its tell-tale line in the log for the assertion to catch.
+  tmp="$(mktemp -d)"
+  stub="$tmp/stub"
+  mkdir "$stub"
+  cat > "$stub/claude" << EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$tmp/claude.calls"
+case "\$*" in
+  *retrospective*) exit 0 ;;  # never block; its presence in the log fails the test
+esac
+: > "$tmp/building"            # signal the harness that the build phase has started
+sleep 30                       # hold the engine in its phase \`wait\` until interrupted
+exit 0
+EOF
+  chmod +x "$stub/claude"
+
+  (
+    cd "$tmp" || exit 1
+    git init --bare -q upstream.git
+    git init -q -b main work
+    cd work || exit 1
+    echo 'FL_GATES=true' > .featureloop
+    mkdir tasks
+    echo 'todo' > tasks/plan.md
+    echo x > README.md
+    git add -A
+    git -c user.email=t@t -c user.name=t commit -qm init
+    git remote add origin ../upstream.git
+    git push -q origin main
+  ) > /dev/null 2>&1
+
+  # Run the engine in the background. `exec` makes $! the engine process itself (not the
+  # wrapping subshell), so `kill -INT` lands on the very process whose INT trap is under
+  # test. FL_RETROSPECTIVE is left at its default (enabled): the skip must come from the
+  # interrupt, not from the opt-out.
+  (cd "$tmp/work" && exec env PATH="$stub:$PATH" FL_NO_SPINNER=1 FL_MAX_ITERS=1 \
+    FL_ARCHIVE_DIR="$tmp/arc" FL_BASE_BRANCH=main FL_WT_DIR="$tmp/wt" \
+    "$FL" TKT slug) > /dev/null 2>&1 &
+  pid=$!
+
+  # Deterministically (with a 10s ceiling) wait until the build phase is actually running
+  # before interrupting, so the signal always lands mid-run rather than racing startup.
+  built=0
+  for _ in $(seq 1 100); do
+    [ -f "$tmp/building" ] && {
+      built=1
+      break
+    }
+    sleep 0.1
+  done
+  kill -INT "$pid"
+  rc=0
+  wait "$pid" || rc=$?
+
+  retro_called=0
+  grep -q retrospective "$tmp/claude.calls" 2> /dev/null && retro_called=1
+  build_called=0
+  [ -s "$tmp/claude.calls" ] && build_called=1
+
+  rm -rf "$tmp"
+  [ "$built" -eq 1 ]        # we really did interrupt mid-build
+  [ "$build_called" -eq 1 ] # sanity: the loop ran and issued the build call
+  [ "$rc" -eq 130 ]         # 128 + SIGINT: the INT trap's exit code
+  [ "$retro_called" -eq 0 ] # the billable retrospective was NOT issued
+}
+
+@test "a normal (uninterrupted) run still writes the retrospective" {
+  # Guards the skip above against over-reach: with no interrupt and the retrospective
+  # enabled (default), a green run MUST still issue the billable retrospective call.
+  tmp="$(mktemp -d)"
+  stub="$tmp/stub"
+  mkdir "$stub"
+  cat > "$stub/claude" << EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$tmp/claude.calls"
+exit 0
+EOF
+  chmod +x "$stub/claude"
+
+  rc=0
+  (
+    cd "$tmp" || exit 1
+    git init --bare -q upstream.git
+    git init -q -b main work
+    cd work || exit 1
+    echo 'FL_GATES=true' > .featureloop
+    mkdir tasks
+    echo 'todo' > tasks/plan.md
+    echo x > README.md
+    git add -A
+    git -c user.email=t@t -c user.name=t commit -qm init
+    git remote add origin ../upstream.git
+    git push -q origin main
+    PATH="$stub:$PATH" FL_NO_SPINNER=1 FL_MAX_ITERS=1 FL_ARCHIVE_DIR="$tmp/arc" \
+      FL_BASE_BRANCH=main FL_WT_DIR="$tmp/wt" \
+      "$FL" TKT slug
+  ) > /dev/null 2>&1 || rc=$?
+
+  retro_called=0
+  grep -q retrospective "$tmp/claude.calls" 2> /dev/null && retro_called=1
+
+  rm -rf "$tmp"
+  [ "$rc" -eq 0 ]           # reached green
+  [ "$retro_called" -eq 1 ] # the retrospective ran on a normal finish
+}
