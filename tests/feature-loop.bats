@@ -751,6 +751,112 @@ EOF
   [ "$committed" -eq 1 ]
 }
 
+# --- regression: post-simplify re-verification re-runs ALL gates (ISSUE-59) -----------
+#
+# Once the loop is green, /code-simplify runs and the engine re-verifies before shipping.
+# That re-check used to run ONLY the project gate (FL_GATES), so a simplify edit that
+# broke /test or the security audit — both of which run through `claude -p`, not FL_GATES
+# — sailed through and shipped as "green". The post-simplify re-check must run the FULL
+# gate suite (test · project · security), exactly like the loop body.
+#
+# Each test stubs claude to drop a `.simplified` marker on the simplify prompt, then to
+# fail one specific gate ONLY once that marker exists. So the loop's pre-simplify gates
+# all pass (no marker yet) and the break surfaces solely in the post-simplify re-check —
+# pinning the regression to that re-check rather than the loop. FL_GATES=true keeps the
+# project gate green throughout, proving the failing gate is one FL_GATES never sees.
+
+@test "a code-simplify that breaks the test gate fails the run instead of shipping green (ISSUE-59)" {
+  tmp="$(mktemp -d)"
+  stub="$tmp/claude"
+  cat > "$stub" << 'EOF'
+#!/usr/bin/env bash
+prompt="${*: -1}"
+case "$prompt" in
+  SIMPLIFY) : > "$PWD/.simplified" ;;                                      # simplify ran
+  TESTGATE) [ -e "$PWD/.simplified" ] && echo broke > "$PWD/tasks/failures/test.md" ;;
+esac
+exit 0
+EOF
+  chmod +x "$stub"
+
+  wt="$tmp/wt"
+  rc=0
+  # `|| rc=$?` is load-bearing: this run is meant to exit non-zero (broke-simplify), and
+  # bats aborts a test the instant a bare command returns non-zero — so capture, don't bare.
+  (
+    cd "$tmp" || exit 1
+    git init --bare -q upstream.git
+    git init -q -b main work
+    cd work || exit 1
+    echo 'FL_GATES=true' > .featureloop
+    mkdir tasks
+    echo 'todo' > tasks/plan.md
+    echo x > README.md
+    git add -A
+    git -c user.email=t@t -c user.name=t commit -qm init
+    git remote add origin ../upstream.git
+    git push -q origin main
+    FL_CLAUDE="$stub" FL_MAX_ITERS=1 FL_ARCHIVE_DIR="$tmp/arc" \
+      FL_BASE_BRANCH=main FL_RETROSPECTIVE=0 FL_WT_DIR="$wt" \
+      FL_BUILD_PROMPT=BUILD FL_TEST_PROMPT=TESTGATE \
+      FL_SECURITY_PROMPT=SECGATE FL_SIMPLIFY_PROMPT=SIMPLIFY \
+      "$FL" TKT slug
+  ) > /dev/null 2>&1 || rc=$?
+
+  broke=0
+  grep -q '"outcome": *"broke-simplify"' "$tmp/arc/runs"/TKT-*/summary.json 2> /dev/null && broke=1
+
+  rm -rf "$tmp"
+  [ "$rc" -ne 0 ]
+  [ "$broke" -eq 1 ]
+}
+
+@test "a code-simplify that breaks the security gate fails the run instead of shipping green (ISSUE-59)" {
+  tmp="$(mktemp -d)"
+  stub="$tmp/claude"
+  cat > "$stub" << 'EOF'
+#!/usr/bin/env bash
+prompt="${*: -1}"
+case "$prompt" in
+  SIMPLIFY) : > "$PWD/.simplified" ;;                                          # simplify ran
+  SECGATE)  [ -e "$PWD/.simplified" ] && echo broke > "$PWD/tasks/failures/security.md" ;;
+esac
+exit 0
+EOF
+  chmod +x "$stub"
+
+  wt="$tmp/wt"
+  rc=0
+  # `|| rc=$?` is load-bearing: this run is meant to exit non-zero (broke-simplify), and
+  # bats aborts a test the instant a bare command returns non-zero — so capture, don't bare.
+  (
+    cd "$tmp" || exit 1
+    git init --bare -q upstream.git
+    git init -q -b main work
+    cd work || exit 1
+    echo 'FL_GATES=true' > .featureloop
+    mkdir tasks
+    echo 'todo' > tasks/plan.md
+    echo x > README.md
+    git add -A
+    git -c user.email=t@t -c user.name=t commit -qm init
+    git remote add origin ../upstream.git
+    git push -q origin main
+    FL_CLAUDE="$stub" FL_MAX_ITERS=1 FL_ARCHIVE_DIR="$tmp/arc" \
+      FL_BASE_BRANCH=main FL_RETROSPECTIVE=0 FL_WT_DIR="$wt" \
+      FL_BUILD_PROMPT=BUILD FL_TEST_PROMPT=TESTGATE \
+      FL_SECURITY_PROMPT=SECGATE FL_SIMPLIFY_PROMPT=SIMPLIFY \
+      "$FL" TKT slug
+  ) > /dev/null 2>&1 || rc=$?
+
+  broke=0
+  grep -q '"outcome": *"broke-simplify"' "$tmp/arc/runs"/TKT-*/summary.json 2> /dev/null && broke=1
+
+  rm -rf "$tmp"
+  [ "$rc" -ne 0 ]
+  [ "$broke" -eq 1 ]
+}
+
 # --- regression: a mid-run abort must not exit 0 (masked-green crash, ISSUE-45) -------
 
 @test "a mid-run abort with a zero \$? exits non-zero and prints no green DONE banner" {
