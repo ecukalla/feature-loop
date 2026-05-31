@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-05-31
+
+### Fixed
+
+- A `test` / `security` gate whose `claude -p` call exited non-zero for any reason other
+  than a timeout (auth/API error, OOM, a killed process, a rejected `--settings`, a bad
+  `FL_CLAUDE` binary) wrote no failure file, so the gate mis-read as a pass and the run
+  could ship `green` on a gate that never actually ran — the same fail-open hole
+  `gate_pipeline` already guarded against. The guard (`fl_gate_timeout` → `fl_gate_crash`)
+  now synthesizes the failure file on **any** non-zero gate exit, keeping the distinct
+  "timed out" wording and adding a "crashed (exit N)" message for other failures, so the
+  loop treats the unfinished gate as failed and retries instead of shipping green. (#104)
+
 ## [0.5.1] — 2026-05-31
 
 ### Added
@@ -294,7 +307,8 @@ Initial release.
 - `.editorconfig`, `.gitattributes`, `.shellcheckrc`, `.markdownlint.yaml`.
 - GitHub issue forms, PR template, `CODEOWNERS`.
 
-[Unreleased]: https://github.com/ecukalla/feature-loop/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/ecukalla/feature-loop/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/ecukalla/feature-loop/releases/tag/v0.5.2
 [0.5.1]: https://github.com/ecukalla/feature-loop/releases/tag/v0.5.1
 [0.5.0]: https://github.com/ecukalla/feature-loop/releases/tag/v0.5.0
 [0.4.2]: https://github.com/ecukalla/feature-loop/releases/tag/v0.4.2
