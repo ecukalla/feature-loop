@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.3] — 2026-05-31
+
 ### Fixed
 
 - Interrupting a `bin/feature-loop` run with Ctrl-C (or a `SIGTERM`) no longer fires the
@@ -316,7 +318,8 @@ Initial release.
 - `.editorconfig`, `.gitattributes`, `.shellcheckrc`, `.markdownlint.yaml`.
 - GitHub issue forms, PR template, `CODEOWNERS`.
 
-[Unreleased]: https://github.com/ecukalla/feature-loop/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/ecukalla/feature-loop/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/ecukalla/feature-loop/releases/tag/v0.5.3
 [0.5.2]: https://github.com/ecukalla/feature-loop/releases/tag/v0.5.2
 [0.5.1]: https://github.com/ecukalla/feature-loop/releases/tag/v0.5.1
 [0.5.0]: https://github.com/ecukalla/feature-loop/releases/tag/v0.5.0
