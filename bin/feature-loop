@@ -368,6 +368,14 @@ _gate_result() {
   if [ -f "$ff" ]; then printf 'FAIL → %s' "${ff#tasks/}"; else printf 'pass'; fi
 }
 
+# Print the three resolved gate verdicts as plain lines, for the non-animated
+# run_gates paths (the parent-mode and off-TTY heartbeat branches).
+_gate_lines() {
+  printf '    %-8s %s\n' test "$(_gate_result test)"
+  printf '    %-8s %s\n' project "$(_gate_result project)"
+  printf '    %-8s %s\n' security "$(_gate_result security)"
+}
+
 # Redraw the three gate lines once: a spinner frame + "running" while the PID is
 # alive, or the resolved ✓/✗ verdict once it has exited. Each line erases to EOL.
 # Args: <frame> <pid-test> <pid-project> <pid-security>.
@@ -699,9 +707,7 @@ run_gates() {
     hdr "Gates — test · project · security"
     gate_pipeline # parent shell: an in-place FL_GATES abort propagates (ISSUE-45)
     wait "$P1" "$P3" || true
-    printf '    %-8s %s\n' test "$(_gate_result test)"
-    printf '    %-8s %s\n' project "$(_gate_result project)"
-    printf '    %-8s %s\n' security "$(_gate_result security)"
+    _gate_lines
   else
     gate_pipeline &
     P2=$!
@@ -713,9 +719,7 @@ run_gates() {
       local hb_pid=$!
       wait "$P1" "$P2" "$P3" || true
       _stop_heartbeat "$hb_pid"
-      printf '    %-8s %s\n' test "$(_gate_result test)"
-      printf '    %-8s %s\n' project "$(_gate_result project)"
-      printf '    %-8s %s\n' security "$(_gate_result security)"
+      _gate_lines
     fi
   fi
   [ -f tasks/failures/test.md ] && ST_TEST="FAIL -> failures/test.md" || ST_TEST="pass"
