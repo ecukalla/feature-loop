@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Interrupting a `bin/feature-loop` run with Ctrl-C (or a `SIGTERM`) no longer fires the
+  post-run retrospective, which is a billable `claude -p` call. Both signals route through
+  the `EXIT` trap so the run still restores the cursor and archives its artefacts, but a
+  user who aborts a run is stopping it to stop spending — charging them for a reflection on
+  the way out was a surprise cost. The trap now records the interrupt and the EXIT path
+  skips the retrospective (logging why), while a normal finish still writes it. (ISSUE-58)
+
 ## [0.5.2] — 2026-05-31
 
 ### Fixed
