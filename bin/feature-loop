@@ -673,7 +673,18 @@ gate_pipeline() {
   fi
 }
 
+# run_gates [parent]
+# Run the three read-only gates concurrently. With the "parent" argument the project
+# gate runs in THIS shell instead of a backgrounded subshell: when clean-tree
+# materialization fails, gates_in_clean_tree eval's FL_GATES in place, and a mid-run
+# abort there (a `set -u` fatal, or an explicit `exit`) must propagate to the EXIT trap
+# and fail the run rather than be swallowed by a subshell and mis-read as green
+# (ISSUE-45). test + security still run in the background — they shell out to `claude -p`
+# and cannot abort us — but the animated panel is skipped, since a foreground project
+# gate has no live PID for the panel to draw. The default (no argument) backgrounds all
+# three for the loop body, where the green/abort signal is the next foreground call.
 run_gates() {
+  local pipeline_mode="${1:-background}"
   local now
   now="$(date '+%H:%M:%S')"
   ST_TEST="running (since $now)"
@@ -682,21 +693,30 @@ run_gates() {
   render_status
   gate_test &
   P1=$!
-  gate_pipeline &
-  P2=$!
   gate_security &
   P3=$!
-  if [ "$FL_ANIMATE" -eq 1 ]; then
-    _gate_panel "$P1" "$P2" "$P3"
-  else
+  if [ "$pipeline_mode" = parent ]; then
     hdr "Gates — test · project · security"
-    _heartbeat "gates" "$P1" "$P2" "$P3" &
-    local hb_pid=$!
-    wait "$P1" "$P2" "$P3" || true
-    _stop_heartbeat "$hb_pid"
+    gate_pipeline # parent shell: an in-place FL_GATES abort propagates (ISSUE-45)
+    wait "$P1" "$P3" || true
     printf '    %-8s %s\n' test "$(_gate_result test)"
     printf '    %-8s %s\n' project "$(_gate_result project)"
     printf '    %-8s %s\n' security "$(_gate_result security)"
+  else
+    gate_pipeline &
+    P2=$!
+    if [ "$FL_ANIMATE" -eq 1 ]; then
+      _gate_panel "$P1" "$P2" "$P3"
+    else
+      hdr "Gates — test · project · security"
+      _heartbeat "gates" "$P1" "$P2" "$P3" &
+      local hb_pid=$!
+      wait "$P1" "$P2" "$P3" || true
+      _stop_heartbeat "$hb_pid"
+      printf '    %-8s %s\n' test "$(_gate_result test)"
+      printf '    %-8s %s\n' project "$(_gate_result project)"
+      printf '    %-8s %s\n' security "$(_gate_result security)"
+    fi
   fi
   [ -f tasks/failures/test.md ] && ST_TEST="FAIL -> failures/test.md" || ST_TEST="pass"
   [ -f tasks/failures/pipeline.md ] && ST_PIPE="FAIL -> failures/pipeline.md" || ST_PIPE="pass"
@@ -766,8 +786,12 @@ else
   # the loop's own green signal (it writes tasks/failures/*.md), so re-running it here
   # holds simplify to the same bar as the build. failures/ is empty at the green break
   # (run_build clears it each iteration); clear it again to be explicit about a fresh verdict.
+  # "parent" mode runs the project gate in this shell so a mid-run abort during the
+  # in-place FL_GATES fallback still fails the run instead of shipping masked-green: the
+  # loop body backgrounds every gate, so this post-green re-check is the only place an
+  # in-place abort can surface (ISSUE-45).
   rm -f tasks/failures/*.md
-  run_gates
+  run_gates parent
   if ls tasks/failures/*.md > /dev/null 2>&1; then
     ST_SIMP="broke gates -> tasks/failures/"
     render_status
