@@ -450,19 +450,29 @@ fl_claude() {
 # (128+SIGKILL, the `-k` escalation).
 fl_timed_out() { [ "$1" -eq 124 ] || [ "$1" -eq 137 ]; }
 
-# A gate's verdict is "did the agent write its failure file?", but a timed-out call
-# never gets to write one — which would mis-read as a pass. Synthesize the failure file
-# on timeout so the loop treats the unfinished gate as failed and retries instead.
-fl_gate_timeout() {
-  local rc="$1" gate="$2" log="$3" ff
-  fl_timed_out "$rc" || return 0
+# A gate's verdict is "did the agent write its failure file?", but a `claude -p` call that
+# exits non-zero — a timeout (124/137) or any other crash (auth/API error, OOM, killed,
+# plain non-zero exit) — may never get to write one, which would mis-read as a pass
+# (ISSUE-57). Synthesize the failure file on any non-zero exit so the loop treats the
+# unfinished gate as failed and retries instead. (The project gate handles its own command
+# the same way; this guards the test/security gates that run through claude -p.)
+fl_gate_crash() {
+  local rc="$1" gate="$2" log="$3" ff headline detail
+  [ "$rc" -ne 0 ] || return 0
   ff="$(_gate_failfile "$gate")"
   [ -f "$ff" ] && return 0
+  if fl_timed_out "$rc"; then
+    headline="timed out"
+    detail="exceeded FL_PHASE_TIMEOUT (${FL_PHASE_TIMEOUT}s) and was killed"
+  else
+    headline="crashed (exit ${rc})"
+    detail="exited ${rc} without writing a verdict"
+  fi
   {
-    echo "# ${gate} gate timed out"
+    echo "# ${gate} gate ${headline}"
     echo
-    echo "The \`claude -p\` ${gate} gate exceeded FL_PHASE_TIMEOUT (${FL_PHASE_TIMEOUT}s) and"
-    echo "was killed. Treating it as failed so the loop retries. Last lines of the phase log:"
+    echo "The \`claude -p\` ${gate} gate ${detail}. Treating it as failed so the loop retries"
+    echo "instead of mis-reading the unfinished gate as a pass. Last lines of the phase log:"
     echo
     echo '```'
     tail -n 40 "$log" 2> /dev/null
@@ -588,13 +598,14 @@ run_build() {
   render_status
 }
 
-# Run one headless claude gate, capturing its log; on timeout fl_gate_timeout synthesizes
-# the failure file so the loop retries instead of mis-reading the unfinished gate as a pass.
+# Run one headless claude gate, capturing its log; on any non-zero exit (timeout or crash)
+# fl_gate_crash synthesizes the failure file so the loop retries instead of mis-reading the
+# unfinished gate as a pass.
 # _run_gate <name> <prompt>
 _run_gate() {
   local gate="$1" log="tasks/logs/${1}-${ITER}.log" rc=0
   fl_claude "$2" > "$log" 2>&1 || rc=$?
-  fl_gate_timeout "$rc" "$gate" "$log"
+  fl_gate_crash "$rc" "$gate" "$log"
 }
 gate_test() { _run_gate test "$FL_TEST_PROMPT"; }
 gate_security() { _run_gate security "$FL_SECURITY_PROMPT"; }

@@ -862,6 +862,56 @@ EOF
   [ "$timed_out_marked" -eq 1 ]
 }
 
+@test "a gate whose claude call crashes is marked failed, not read as green (ISSUE-57)" {
+  # A gate's verdict is "did the agent write its failure file?". A claude -p call that
+  # exits non-zero for any reason other than a timeout (auth/API error, OOM, plain crash)
+  # never writes one either, so without the guard it mis-reads as a pass (green). The
+  # engine must synthesize the failure file on any non-zero exit. The stub exits 3 ONLY on
+  # the test-gate prompt (no failure file written); everything else is instant and green.
+  # The run must end not-green (exit 1) with a synthesized failure naming the crash.
+  tmp="$(mktemp -d)"
+  stub="$tmp/claude"
+  cat > "$stub" << 'EOF'
+#!/usr/bin/env bash
+# feature-loop invokes: claude --dangerously-skip-permissions -p <prompt>
+prompt="${*: -1}"
+case "$prompt" in
+  *test-driven-development*) exit 3 ;; # the test gate — crashes without writing a verdict
+esac
+exit 0
+EOF
+  chmod +x "$stub"
+
+  wt="$tmp/wt"
+  rc=0
+  (
+    cd "$tmp" || exit 1
+    git init --bare -q upstream.git
+    git init -q -b main work
+    cd work || exit 1
+    echo 'FL_GATES=true' > .featureloop
+    mkdir tasks
+    echo 'todo' > tasks/plan.md
+    echo x > README.md
+    git add -A
+    git -c user.email=t@t -c user.name=t commit -qm init
+    git remote add origin ../upstream.git
+    git push -q origin main
+    FL_CLAUDE="$stub" FL_MAX_ITERS=1 \
+      FL_ARCHIVE_DIR="$tmp/arc" FL_BASE_BRANCH=main FL_RETROSPECTIVE=0 FL_WT_DIR="$wt" \
+      "$FL" TKT slug
+  ) > /dev/null 2>&1 || rc=$? # not-green exits 1; capture it instead of aborting the test
+
+  # The synthesized failure file names the crash and exit code, and the run ended not-green
+  # (exit 1) rather than mis-reading the crashed gate as a pass.
+  crash_marked=0
+  grep -rqi "crashed (exit 3)" "$tmp/arc/runs"/TKT-*/failures/test.md 2> /dev/null && crash_marked=1
+
+  rm -rf "$tmp"
+  [ "$rc" -eq 1 ]
+  [ "$crash_marked" -eq 1 ]
+}
+
 @test "a code-simplify timeout ships the green tip instead of failing the run" {
   # Simplify is optional post-green polish; a timeout there must not sink an
   # already-green tip. The stub sleeps ONLY on the simplify prompt (outlasting
