@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.4] — 2026-05-31
+
+### Fixed
+
+- The post-`/code-simplify` re-verification now runs the **full** gate suite (test ·
+  project · security) instead of only the project gate (`FL_GATES`). Once a run went
+  green, `/code-simplify` ran and the engine re-checked the simplified tree before
+  shipping — but that re-check invoked only `gates_in_clean_tree`, so a simplify edit
+  that broke `/test` or introduced a security finding (both run through `claude -p`, not
+  `FL_GATES`) sailed through and shipped as green. The re-check now calls `run_gates`,
+  the loop's own green signal, and fails the run with `broke-simplify` if any gate
+  regresses. The new `run_gates parent` mode runs the project gate in the parent shell so
+  a mid-run abort during the in-place `FL_GATES` fallback still propagates rather than
+  being swallowed and mis-read as green (the ISSUE-45 masked-green class). (ISSUE-59)
+
 ## [0.5.3] — 2026-05-31
 
 ### Fixed
@@ -318,7 +333,8 @@ Initial release.
 - `.editorconfig`, `.gitattributes`, `.shellcheckrc`, `.markdownlint.yaml`.
 - GitHub issue forms, PR template, `CODEOWNERS`.
 
-[Unreleased]: https://github.com/ecukalla/feature-loop/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/ecukalla/feature-loop/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/ecukalla/feature-loop/releases/tag/v0.5.4
 [0.5.3]: https://github.com/ecukalla/feature-loop/releases/tag/v0.5.3
 [0.5.2]: https://github.com/ecukalla/feature-loop/releases/tag/v0.5.2
 [0.5.1]: https://github.com/ecukalla/feature-loop/releases/tag/v0.5.1
